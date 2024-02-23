@@ -286,3 +286,56 @@ synchronized 关键字用于保证多线程访问共享变量时的同步性，�
 synchronized 不能修饰构造函数，因为构造函数本身是线程安全的，即每个线程 new 的对象是独立的，并不会产生冲突，但构造函数的参数可能是共享的，故构造函数内的代码块可以被 synchronized 修饰
 
 ### 底层实现
+
+synchronized 关键自底层原理属于 JVM 层面，其本质为对象监视器 monitor 的获取
+
+#### 代码块
+
+synchronized 同步语句块的实现使用的是 monitorenter 和 monitorexit 指令，其中 monitorenter 指令指向同步代码块的开始位置，monitorexit 指令则指明同步代码块的结束位置
+
+HotSpot 中，Monitor 是基于 C++ 的 ObjectMonitor 实现的，每个对象都内置了一个 ObjectMonitor 对象。wait/notify 等方法也依赖于 monitor 对象，所以只有在同步的块或方法中才能调用 wait/notify 等方法
+
+执行 monitorenter 时会尝试获取对象的锁，若锁的计数器为 0 则表示锁可以被获取，获取后将锁计数器加一
+
+![](https://oss.javaguide.cn/github/javaguide/java/concurrent/synchronized-get-lock-code-block.png)
+
+只有拥有对象锁的线程能够执行 monitorexit 指令来释放锁，在执行 monitorexit 指令后，将锁计数器设为 0，表明锁被释放，其他线程可以尝试获取锁
+
+![](https://oss.javaguide.cn/github/javaguide/java/concurrent/synchronized-release-lock-block.png)
+
+如果获取对象锁失败，那当前线程就要阻塞等待，直到锁被另外一个线程释放为止
+
+#### 方法
+
+synchronized 修饰方法并不会产生 monitorenter 与 monitorexit 指令，而是由 ACC_SYNCHORIZED 访问标识指明该方法为一个同步方法，JVM 由此辨别同步方法，从而执行相应的同步调用
+
+对于实例方法，JVM 会尝试获取实例对象的锁，对于静态方法，JVM 会尝试获取当前类对象的锁
+
+### 优化
+
+在 Java 6 后，synchronized 底层引入了自旋锁、适应性自旋锁、偏向锁、锁消除、锁加粗、轻量级锁等技术来减少锁操作的开销
+
+锁主要存在四种状态：
+
+- 无锁状态
+- 偏向锁状态
+- 轻量级锁状态
+- 重量级锁状态
+
+它们随着竞争的激烈程度而逐渐升级，且该升级不可逆，由此来提高获取锁和释放锁的效率
+
+### synchronized vs volatile
+
+两个关键字都能确保变量的可见性与有序性
+
+- 修饰范围：volatile 只能修饰变量；synchronized 能修饰方法与代码块
+- 原子性：volatile 只能保证对单个变量的可见性；synchronized 能保证同一时间只有一个线程执行方法/代码块
+- 开销：volatile 更加轻量级，主要用于解决共享变量在多个线程之间的可见性；synchronized 解决多个线程之间访问资源的同步性
+
+## ReentrantLock
+
+ReentrantLock 实现了 Lock 接口，是一个可重入且独占式的锁，和 synchronized 关键字类似，但 ReentrantLock 更灵活、更强大，增加了轮询、超时、中断、公平锁、非公平锁等高级功能
+
+ReentrantLock 中有一个内部类 Sync，Sync 继承自 AQS，添加/释放锁的大部分操作实际上都是在 Sync 中实现的。Sync 有公平锁 FairSync 和非公平锁 NonfairSync 两个子类
+
+ReentrantLock 默认使用公平锁，也可以通过构造器来显式地指定使用公平锁
