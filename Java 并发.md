@@ -339,3 +339,201 @@ ReentrantLock 实现了 Lock 接口，是一个可重入且独占式的锁，和
 ReentrantLock 中有一个内部类 Sync，Sync 继承自 AQS，添加/释放锁的大部分操作实际上都是在 Sync 中实现的。Sync 有公平锁 FairSync 和非公平锁 NonfairSync 两个子类
 
 ReentrantLock 默认使用公平锁，也可以通过构造器来显式地指定使用公平锁
+
+### 公平锁 vs 非公平锁
+
+- 公平锁：锁被释放后，先申请的线程先得到锁(先到先得)，为了保证时间上的公平性，会频繁切换上下文，导致性能较差
+- 非公平锁：锁被释放后，线程按其他优先级顺序/随机获取到锁，性能更高，但会有饿死的问题
+
+### synchronized vs ReentrantLock
+
+#### 可重入锁
+
+两者都是可重入锁，即线程可以再次获取到自己的内部锁
+
+```java
+public class SynchronizedDemo {
+    public synchronized void m1() {
+        m2();
+    }
+    
+    public synchronized void m2() {
+        
+    }
+}
+```
+
+同一线程在调用 m1 时获取到当前对象锁，执行 m2 时可以再次获取到当前对象的锁
+
+若 synchronized 不可重入，则因为该对象的锁被当前线程持有且无法释放，导致线程在执行 m2 时获取锁失败，出现死锁问题
+
+#### 底层实现
+
+- synchronized 关键字依赖于 JVM 中的 monitor 对象，实质是利用 C++ 的 ObjectMonitor 对象，其优化也由 JVM 实现
+- ReentrantLock 依赖于 JDK 层面的实现
+
+#### 功能
+
+ReentrantLock 新增了一些高级功能：
+
+- 等待可中断：ReentrantLock 通过 lock.lockInterruptibly() **令正在等待的线程主动放弃等待**，改为处理其他事情
+  - 可中断锁：获取锁的过程中可以主动放弃等待
+  - 不可中断锁：一旦开始申请锁，线程就会一直等待至获取到锁，synchronized 为不可中断锁
+- 可实现公平锁：ReentrantLock 默认为非公平锁，可以通过构造函数指定为公平锁
+- 可实现选择性通知(锁可以绑定多个条件)：synchronized 关键字与 wait()、notify()、notifyAll() 方法相结合实现等待/通知机制；ReentrantLock 通过 Condition 接口与 newCondition() 方法实现
+  - Condition：可以理解为一个 Monitor 对象，一个 Lock 能够挂载多个 Condition，不同的线程能够注册在不同的 Condition 中，并由此选择性地通知(notify)指定的线程
+    - 在 synchronized 中，notify() 唤醒的线程由 JVM 决定，所有线程都注册在同一个 Monitor 对象中，故 notifyAll() 的性能开销大
+
+## ReentrantReadWriteLock
+
+实现读写锁，读锁可以被多个线程持有(共享锁)，写锁只能被一个线程持有(独占锁)，从而实现读读不互斥，保证多个线程同时读的效率与写入操作时的线程安全，适用于读多写少的场景
+
+- 存在线程持有读锁时(有线程在读)，无法获取写锁，但仍能获取读锁
+- 存在线程持有写锁时(有线程在写)，无法获取读锁与写锁
+
+## ThreadLocal
+
+ThreadLocal 类用于为每个访问的线程提供一份副本，即每个访问 ThreadLocal 类的线程都会在工作内存中创建一份副本来获取/修改
+
+### 原理
+
+```java
+public class Thread implements Runnable {
+    // 与此线程有关的 ThreadLocal 值，由 ThreadLocal 类维护
+    ThreadLocal.ThreadLocalMap threadLocals = null;
+    
+    // 与此线程有关的 InheritableThreadLocal 值，由 InheritableThreadLocal 类维护
+    ThreadLocal.ThreadLocalMap inheritableThreadLocals = null;
+}
+```
+
+Thread 类中有一个 threadLocals 和一个 inheritableThreadLocals 变量，都是 ThreadLocalMap 类型(为 ThreadLocal 类定制的 HashMap)，只有当前线程调用 ThreadLocal 类的 set 和 get 方法时才能创建
+
+```java
+public void set(T value) {
+    // 获取当前线程
+    Thread t = Thread.currentThread();
+    // 取出当前线程的内部变量表 ThreadLocalMap
+    ThreadLocalMap map = getMap(t);
+    if(map != null)
+        map.set(this, value);
+    else
+        createMap(t, value);
+}
+
+ThreadLocalMap getMap(Thread t) {
+    return t.threadLocals;
+}
+```
+
+**最终的变量是放在了当前线程的 ThreadLocalMap 中**，ThreadLocal 类可以通过 Thread.currentThread() 获取到当前线程对象后，直接通过 getMap(Thread t) 可以访问到该线程的 ThreadLocalMap 对象
+
+每个 Thread 中都具备一个 ThreadLocalMap，而 ThreadLocalMap 可以存储以 ThreadLocal 为 key，Object 对象为 value 的键值对
+
+![](https://pic2.zhimg.com/80/v2-adecb8b867ce06a962df2a3668563101_720w.webp)
+
+### ThreadLocal 内存泄漏
+
+#### 弱引用
+
+只具有弱引用的对象拥有比软引用更短的生命周期，在垃圾回收线程扫描它管辖的内存区域时，一旦发现了只具有弱引用的对象，不管当前内存空间是否足够，都会回收
+
+将弱引用和一个引用队列联合使用，当弱引用所引用的对象被垃圾回收，JVM 就会把这个弱引用加入到与之关联的引用队列中
+
+#### 强引用
+
+只要对象具有强引用，该对象就不能被回收
+
+#### 内存泄漏原因
+
+ThreadLocalMap 中的 key 是 ThreadLocal 的弱引用，value 是强引用，故当 ThreadLocalMap 没有被外部强引用的情况下，在垃圾回收时，key 会被清理掉，value 不会。此时会产生 key 为 null 的 Entry，GC 回收无法辨别，相应的内存就被泄漏
+
+key 为弱引用：ThreadLocalMap 与线程绑定，若 key 为强引用，则当对应的 ThreadLocal 不再被使用时也不会回收，其对应的 value 对象也会随线程一直存在，直到线程销毁。将 key 设置为弱引用就可以保证不再用到的 ThreadLocal 会被及时回收
+
+value 为强引用：若 value 为弱引用，则当其 Object 对象不存在外部强引用时就会被 GC 回收，此时 key 的 ThreadLocal 还存在，就会产生获取结果为 null 的情况
+
+#### 解决
+
+ThreadLocalMap 实现中，在调用 set()/get()/remove() 方法时，会清理掉 key 为 null 的 Entry，故在使用完 ThreadLocal 方法后应手动调用 remove() 方法
+
+## 线程池
+
+线程池就是管理一组线程的资源池，当有任务需要处理时可以直接分配给线程池中的线程，而不用在生成新的线程，当线程处理完任务后也可以直接等待下一个任务，而不需要进行销毁，由此可以减少线程创建/销毁的开销，提高资源的利用率
+
+- 减少开销：不需要频繁进行线程的创建/销毁
+- 加快响应：任务可以直接分配给等待的线程执行，而不需要进行创建
+- 便于管理：所有线程都由线程池统一管理
+
+### 创建线程池
+
+- ThreadPoolExecutor 构造函数
+- Executor 框架工具类 Executors (JDK 内置的线程池)：
+  - FixedThreadPool/SingleThreadExecutor：使用无界的 LinkedBlockingQueue，最大长度为 Integer.MAX_VALUE，可能 OOM
+  - CachedThreadPool：使用同步队列 SynchronousQueue，最大长度为 Integer.MAX_VALUE
+  - ScheduledThreadPool/SingleThreadScheduledExecutor：使用无界的延迟阻塞队列 DelayedWorkQueue，任务队列最大长度为 Integer.MAX_VALUE
+  - 在任务数量多且处理速度满的情况下，可能会堆积大量请求，从而导致 OOM
+
+### 线程池参数
+
+ThreadPoolExecutor:
+
+- corePoolSize：核心线程数，即任务队列未满时最大可以同时运行的线程数
+  - keepAliveTime：线程等待的最大时长，直到线程池中的数量 == 核心线程数时才不再回收
+- maximumPoolSize：任务队列已满时，同时可运行的线程数
+  - maximumPoolSize = corePoolSize + 非核心线程数
+- workQueue：正在工作的线程数 == 核心线程数时，将新任务暂存于工作队列
+
+### 线程池饱和策略
+
+任务队列已满时对新任务的处理：
+
+- AbortPolicy：拒绝处理并抛出异常
+- CallerRunsPolicy：直接在调用者的线程中运行被拒绝的任务，若调用者已关闭，则丢弃任务。该策略会降低新任务的提交速度(调用者需要自己先处理任务)，影响程序整体性能，适用于能够接受延迟且要求每个任务都被执行的场景
+- DiscardPolicy：直接丢弃
+- DiscardOldestPolicy：直接丢弃任务队列中等待最久的任务
+
+### 阻塞队列
+
+- LinkedBlockingQueue：最大值为 Integer.MAX_VALUE 的无界队列
+  - FixedThrealPool：核心线程数 == 最大线程数
+  - SingleThreadExector：只能创建一个线程
+- SynchronousQueue：同步队列，没有容量，不存储元素，将提交的任务分配给空闲线程或创建新的线程处理，即线程是无限扩展的
+  - CachedThreadPool
+- DelayedWorkQueue：延迟队列，内部元素按延迟的时间长短排序，只有到达时间的才能出列(堆)，队列满时会自动扩容(增加 1/2，最大 Integer.MAX_VALUE)，即永远不会阻塞
+  - ScheduledThreadPool/SingleThreadScheduledExecutor
+
+### 处理任务流程
+
+1. 当前线程数 < 核心线程数：创建新线程执行任务
+2. 当前线程数 >= 核心线程数 && 当前线程数 < 最大线程数：将任务放入工作队列中等待
+3. 任务队列已满 && 当前线程数 < 最大线程数：新建线程执行任务
+4. 当前线程数 == 最大线程数：调用饱和策略处理
+
+### 线程池大小
+
+线程池过小会导致大量的请求堆积/丢弃
+
+线程池过大会造成频繁的线程上下文切换(大量的线程同时抢夺 CPU 资源)
+
+- CPU 密集型(n + 1)：任务主要消耗 CPU 资源，可以将线程池大小设置为 CPU 核心数 + 1，多出的线程用于防止线程偶发的缺页中断或其他原因导致的暂停
+- I/O 密集型(2n)：大量的 I/O 交互会导致许多线程阻塞，等待 I/O 期间不需要占用 CPU 资源，可以主动放弃给其他线程使用
+
+### 任务优先级执行的线程池
+
+使用 PriorityBlockingQueue 构造 workQueue
+
+PriorityBlockingQueue 支持优先级的无界队列，但不支持阻塞操作
+
+#### 实现
+
+- 提交到队列的线程需要可比较：
+  - 实现 Comparable 接口，重写 compareTo 方法
+  - 构造函数中传入 Comparator 对象指定排序规则
+
+#### 问题
+
+- PriorityBlockingQueue 无界，可能堆积大量请求
+  - 通过重写 offer 方法，手动设置容量
+- 优先级导致饿死
+  - 优化设计，令长期等待的低优先级任务重新入队并提高优先级
+- 排序性能
