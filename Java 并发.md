@@ -96,6 +96,34 @@ Runnable，Callable 对象只是提供给线程执行的任务
 
 通过算法为资源的分配进行评估，使其进入安全状态(存在一种分配顺序，使每个线程最终都能顺利完成)
 
+## Runnable vs Callable
+
+Callable 在 Java 5 引入，用于补充 Runnable 不支持的场景(Runnable 接口没有返回值，且不会抛出异常)，但 Runnable 接口更加简洁
+
+Executor 框架可以将 Runnable 转换为 Callable
+
+```java
+@FunctionalInterface
+public interface Runnable {
+   /**
+    * 被线程执行，没有返回值也无法抛出异常
+    */
+    public abstract void run();
+}
+
+@FunctionalInterface
+public interface Callable<V> {
+    /**
+     * 计算结果，或在无法这样做时抛出异常。
+     * @return 计算得出的结果
+     * @throws 如果无法计算结果，则抛出异常
+     */
+    V call() throws Exception;
+}
+```
+
+
+
 ## sleep() vs wait()
 
 两者都会让线程进入 WAITING/TIME_WAITING 状态
@@ -473,6 +501,65 @@ ThreadLocalMap 实现中，在调用 set()/get()/remove() 方法时，会清理�
   - ScheduledThreadPool/SingleThreadScheduledExecutor：使用无界的延迟阻塞队列 DelayedWorkQueue，任务队列最大长度为 Integer.MAX_VALUE
   - 在任务数量多且处理速度满的情况下，可能会堆积大量请求，从而导致 OOM
 
+### Executor 框架
+
+Executor 框架在 Java 5 后引入，通过 Executor 来启动线程比使用 Thread 的 start 方法更好，除了更易管理，效率更好(线程池)外，还有助于避免 this 逃逸(初始化完成前其他线程就拥有了对象的引用)
+
+- 任务(Runnable/Callable)：执行任务需要实现的 Runnable/Callable 接口，其实现类可以被 ThreadPoolExecutor 或 ScheduledThreadPoolExecutor 执行
+- 执行(Executor)：任务执行机制的核心接口 Executor，以及继承自 Executor 接口的 ExecutorService 接口
+- 异步计算结果(Future)：Future 接口及其实现类 FutureTask
+
+流程：
+
+1. 主线程创建任务对象：实现 Runnable/Callable 接口的任务对象
+2. 将任务对象交给 ExecutorService 执行：
+   - ExecutorService.execute(Runnable command)
+   - ExecutorService.sumbit(Runnable task)
+   - ExecutorService.sumbit(Callable\<T\> task)
+3. submit 方法将返回一个实现 Future 接口的对象(FutureTask)，由于 FutureTask 实现了 Runnable 接口，所以也可以用于执行
+4. 主线程可以执行 FutureTask.get() 方法来等待任务执行完成，主线程也可以执行 FutureTask.cancel(boolean mayInterruptIfRunning) 来取消任务的执行
+
+![](https://javaguide.cn/assets/Executor%E6%A1%86%E6%9E%B6%E7%9A%84%E4%BD%BF%E7%94%A8%E7%A4%BA%E6%84%8F%E5%9B%BE-PBioDAvY.png)
+
+#### execute() vs submit()
+
+- execute() 用于提交不需要返回值的任务，无法判断任务是否执行成功
+- submit() 用于提交需要返回值的任务，线程池会返回 Future 类型对象，通过该对象判断与获取执行结果
+
+### ThreadPoolExecutor 
+
+线程池实现类 ThreadPoolExecutor 是 Executor 框架最核心的类
+
+#### 构造方法
+
+```java
+    /**
+     * 用给定的初始参数创建一个新的ThreadPoolExecutor。
+     */
+    public ThreadPoolExecutor(int corePoolSize,//线程池的核心线程数量
+                              int maximumPoolSize,//线程池的最大线程数
+                              long keepAliveTime,//当线程数大于核心线程数时，多余的空闲线程存活的最长时间
+                              TimeUnit unit,//时间单位
+                              BlockingQueue<Runnable> workQueue,//任务队列，用来储存等待执行任务的队列
+                              ThreadFactory threadFactory,//线程工厂，用来创建线程，一般默认即可
+                              RejectedExecutionHandler handler//拒绝策略，当提交的任务过多而不能及时处理时，我们可以定制策略来处理任务
+                               ) {
+        if (corePoolSize < 0 ||
+            maximumPoolSize <= 0 ||
+            maximumPoolSize < corePoolSize ||
+            keepAliveTime < 0)
+            throw new IllegalArgumentException();
+        if (workQueue == null || threadFactory == null || handler == null)
+            throw new NullPointerException();
+        this.corePoolSize = corePoolSize;
+        this.maximumPoolSize = maximumPoolSize;
+        this.workQueue = workQueue;
+        this.keepAliveTime = unit.toNanos(keepAliveTime);
+        this.threadFactory = threadFactory;
+        this.handler = handler;
+    }
+```
+
 ### 线程池参数
 
 ThreadPoolExecutor:
@@ -502,12 +589,14 @@ ThreadPoolExecutor:
 - DelayedWorkQueue：延迟队列，内部元素按延迟的时间长短排序，只有到达时间的才能出列(堆)，队列满时会自动扩容(增加 1/2，最大 Integer.MAX_VALUE)，即永远不会阻塞
   - ScheduledThreadPool/SingleThreadScheduledExecutor
 
-### 处理任务流程
+### 线程池实现原理
 
-1. 当前线程数 < 核心线程数：创建新线程执行任务
+1. 当前线程数 < 核心线程数：创建新线程执行任务(addWorker 方法，成功创建并运行工作线程返回 true，否则返回 false)
 2. 当前线程数 >= 核心线程数 && 当前线程数 < 最大线程数：将任务放入工作队列中等待
 3. 任务队列已满 && 当前线程数 < 最大线程数：新建线程执行任务
 4. 当前线程数 == 最大线程数：调用饱和策略处理
+
+![](https://oss.javaguide.cn/github/javaguide/java/concurrent/thread-pool-principle.png)
 
 ### 线程池大小
 
