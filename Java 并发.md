@@ -537,3 +537,144 @@ PriorityBlockingQueue 支持优先级的无界队列，但不支持阻塞操作
 - 优先级导致饿死
   - 优化设计，令长期等待的低优先级任务重新入队并提高优先级
 - 排序性能
+
+## Future
+
+Future 类的核心思想是异步调用，即将耗时长的任务交由子线程异步执行，在需要用到任务结果时再通过 Future 类获取其返回值，如此就不需要一直原地等待耗时任务执行完成，提高了程序的效率
+
+Java 中的 Future 类是一个泛型接口，主要定义了以下功能：
+
+- 取消任务
+- 判断任务是否被取消
+- 判断任务是否已经执行完成
+- 获取任务执行结果
+
+### FutrueTask
+
+FutureTask 提供了 Future 接口的基本实现，常用于封装 Callable 和 Runnable，具有取消任务、查看任务是否执行完成以及获取任务执行结果的方法
+
+FutureTask 也实现了 Runnable 接口，因此可以作为任务直接被线程执行
+
+FutureTask 相当于对 Callable 进行封装，管理任务执行情况，存储 Callable 的 call 方法的任务执行结果
+
+### CompletableFuture
+
+Future 类不支持异步任务的编排组合(将多个异步任务串联起来，组成一个完整的链式调用)，获取计算结果的 get() 方法为阻塞调用
+
+CompletableFuture 类用于提供更加强大的 Future 接口实现，其实现了 CompletionStage 接口与 Runnable 接口
+
+CompletionStage 接口描述了一个异步计算的阶段，很多计算可以分成多个阶段或步骤，此时可以通过它将所有步骤组合起来，形成异步计算的流水线
+
+## AQS
+
+AbstractQueueSynchronizer 即抽象队列同步器，该接口为锁与同步器的实现提供了许多通用的方法
+
+### 原理
+
+核心思想：线程在获取共享资源时，若资源空闲则直接获取并加锁；若已被占有，则需要引入一套阻塞等待与唤醒分配机制来等待资源被释放
+
+CLH 队列是一个虚拟的双向队列(并不存在实例，只是逻辑上的关系)，将需要获取共享资源的线程封装成一个节点存储
+
+- 等待状态
+- 线程引用
+- 前驱节点
+- 后继结点
+
+![](https://oss.javaguide.cn/p3-juejin/40cb932a64694262993907ebda6a0bfe~tplv-k3u1fbpfcp-zoom-1.png)
+
+AQS 通过维护一个 int 变量 state 来表示资源的状态，线程获取到资源时会将 state + 1 表示加锁(可重入锁会不断叠加)，在解锁时将 state -1，直到 state 回到 0 时才能被其他线程获取，state 由 volatile 修饰以确保可见性
+
+AQS 通过内置的线程等待队列完成线程的排队工作
+
+![](https://oss.javaguide.cn/github/javaguide/java/CLH.png)
+
+### Semaphore
+
+信号量，用于规定有多少线程能获取共享变量的场景，若线程为 1 则退化为互斥锁
+
+Semaphore 能够实现公平与非公平模式
+
+Semaphore 使用简单，可以用于资源有明确访问数量限制的场景(限流)，但一般用于单机模式，实际项目中使用 Redis + Lua
+
+#### 原理
+
+Semaphore 是一种共享锁的实现，通过 AQS 的 state 来标识有多少个线程能获取资源。线程在获取资源(semaphore.acquire())时会通过 CAS 尝试修改 state -1，成功则获取到资源；解锁(semaphore.release())时也通过 CAS 操作令 state + 1，再唤醒等待的线程通过 CAS 获取锁
+
+### CountDownLatch
+
+类似于屏障，允许 count 个线程阻塞在一个地方，直至所有线程都执行完毕
+
+CountDownLatch 是一次性的，即 count 只在初始化时赋值，之后不可修改，且 CountDownLatch 执行完后不可再次使用
+
+#### 原理
+
+CountDownLatch 用 count 作为 AQS 的 state 值，每个线程调用 countDown() 方法时通过 CAS 操作将 state - 1，调用 await() 方法时若 state 值不为零(仍有线程未执行完毕)则阻塞线程，直到 count 个线程调用了 countDown() 方法或 await() 方法被中断才会唤醒
+
+#### 使用场景
+
+多线程处理多个文件，需要将所有文件处理完毕后才返回：
+
+- 定义线程池与 count 为 6 的 CountDownLatch 对象
+- 使用线程池处理任务，每个线程处理完后调用 countDown() 方法
+- 调用 CountDownLatch 对象的 await() 方法，直到所有文件都执行完后才返回
+
+````java
+public class CountDownLatchExample1 {
+    // 处理文件的数量
+    private static final int threadCount = 6;
+
+    public static void main(String[] args) throws InterruptedException {
+        // 创建一个具有固定线程数量的线程池对象（推荐使用构造方法创建）
+        ExecutorService threadPool = Executors.newFixedThreadPool(10);
+        final CountDownLatch countDownLatch = new CountDownLatch(threadCount);
+        for (int i = 0; i < threadCount; i++) {
+            final int threadnum = i;
+            threadPool.execute(() -> {
+                try {
+                    //处理文件的业务操作
+                    //......
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } finally {
+                    //表示一个文件已经被完成
+                    countDownLatch.countDown();
+                }
+
+            });
+        }
+        countDownLatch.await();
+        threadPool.shutdown();
+        System.out.println("finish");
+    }
+}
+
+````
+
+改进：
+
+- 通过 CompletableFuture 类提供的多线程友好方法
+- 任务过多时循环添加任务
+
+### CyclicBarrier
+
+功能更强大的 CountDownLatch，基于 ReentrantLock 类和 Condition 接口实现，能够让一组线程到达一个同步点时被阻塞，直到所有线程到达时才会唤醒
+
+#### 原理
+
+CyclicBarrier 内部通过一个 count 变量作为计数器，count 的初始值为 parties 属性的初始化值，每当一个线程到达栅栏调用 await() 方法通知 CyclicBarrier，count - 1，当 count == 0 表示所有线程都到达，则尝试执行构造方法中输入的任务
+
+```java
+public CyclicBarrier(int parties) {
+    this(parties, null);
+}
+
+public CyclicBarrier(int parties, Runnable barrierAction) {
+    if (parties <= 0) throw new IllegalArgumentException();
+    // 拦截的线程数量
+    this.parties = parties;
+    this.count = parties;
+    this.barrierCommand = barrierAction;
+}
+
+```
+
