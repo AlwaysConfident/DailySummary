@@ -456,27 +456,161 @@ ThreadLocalMap getMap(Thread t) {
 
 **最终的变量是放在了当前线程的 ThreadLocalMap 中**，ThreadLocal 类可以通过 Thread.currentThread() 获取到当前线程对象后，直接通过 getMap(Thread t) 可以访问到该线程的 ThreadLocalMap 对象
 
-每个 Thread 中都具备一个 ThreadLocalMap，而 ThreadLocalMap 可以存储以 ThreadLocal 为 key，Object 对象为 value 的键值对
+每个 Thread 中都具备一个 ThreadLocalMap，而 ThreadLocalMap 可以存储以 ThreadLocal 的弱引用为 key，Object 对象为 value 的键值对
+
+ThreadLocalMap 类似于 HashMap，但只有数组没有链表：
+
+- 若当前桶为 null 则直接插入
+- 若当前桶不为空，key 值过期，则启动探测式清理
+- 发生哈希冲突时会尝试往下迭代
 
 ![](https://pic2.zhimg.com/80/v2-adecb8b867ce06a962df2a3668563101_720w.webp)
 
+### ThreadLocalMap Hash
+
+#### 哈希算法
+
+```java
+// i 为当前 key 在散列表中对应的数组下标位置
+// threadLocalHashCode 由 HASH_INCREMENT 递增而来
+// HASH_INCREMENT 为斐波那契数，以此为增量能使哈希分布非常均匀
+int i = key.threadLocalHashCode & (len - 1);
+```
+
+#### 哈希冲突
+
+ThreadLocalMap 中只有散列数组，没有链表结构，故当发生哈希冲突时会向下循环查找 Entry 为 null 的位置
+
+- Entry 为 null：直接插入
+
+- Entry 不为 null，key 值相等：更新 value
+
+- Entry 不为 null，key 值不等：往后循环遍历
+
+  - 找到 Entry 为 null 或 key 值相等：直接插入/更新
+
+  - 找到 Entry 不为 null，key 值为 null：
+
+    - 执行 replaceStaleEntry() 方法，以当前位置(staleSlot)为起点开始(向前)遍历，进行探测式数据清理，直到遇到 Entry 为 null 的位置(其前一个过期 Entry 为 slotToExpunge)
+
+    ![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f3ba9509b36c1~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+    ![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f3ba957014857~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+    - 以 staleSlot 位置向后迭代，找到相同 key 值的 Entry 时直接更新，再与 staleSlot 交换元素
+
+    ![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f3ba96c6b080d~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+    - 若找到 Entry 为 null 的元素，即没有 key 值相同的 Entry，此时创建新的 Entry 替换 staleSlot
+
+    ![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f3ba9848c608b~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+    - 更新/替换完成后进行过期元素清理
+
+    ![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f3ba9af057e1e~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+### 过期 key 清理
+
+#### 探测式
+
+expungeStaleEntry()，遍历散列数组，从开始位置向后探测清理过期数据，将过期数据的 Entry 设置为 null，沿途中碰到未过期的数据则将此数据 rehash 后重新在 table 数组中定位，如果定位的位置已经有了数据，则会将未过期的数据放到最靠近此位置的 Entry = null 的桶中，使 rehash 后的 Entry 数据距离正确的桶的位置更近一些
+
+#### 启发式
+
+![](https://p1-jj.byteimg.com/tos-cn-i-t2oaga2asx/gold-user-assets/2020/5/8/171f49d18669ff50~tplv-t2oaga2asx-zoom-in-crop-mark:1512:0:0:0.awebp)
+
+```java
+private boolean cleanSomeSlots(int i, int n) {
+    boolean removed = false;
+    Entry[] tab = table;
+    int len = tab.length;
+    do {
+        i = nextIndex(i, len);
+        Entry e = tab[i];
+        // 找到 key == null 的 Entry 时执行探测式清理
+        if (e != null && e.get() == null) {
+            n = len;
+            removed = true;
+            i = expungeStaleEntry(i);
+        }
+    } while ( (n >>>= 1) != 0);
+    return removed;
+}
+```
+
+### InheritableThreadLocal
+
+用于解决 ThreadLocal 在异步场景无法给子线程共享父线程中创建的线程副本数据
+
+父线程调用 new Thread() 创建子线程，其中 Thread#init 方法在 Thread 的构造方法中被调用，在 init 方法中拷贝父线程数据到子线程中
+
+```java
+private void init(ThreadGroup g, Runnable target, String name,
+                      long stackSize, AccessControlContext acc,
+                      boolean inheritThreadLocals) {
+    if (name == null) {
+        throw new NullPointerException("name cannot be null");
+    }
+
+    if (inheritThreadLocals && parent.inheritableThreadLocals != null)
+        this.inheritableThreadLocals =
+            ThreadLocal.createInheritedMap(parent.inheritableThreadLocals);
+    this.stackSize = stackSize;
+    tid = nextThreadID();
+}
+```
+
+当使用线程池时，父线程创建的子线程会复用线程池内的线程，因此不会调用 init() 将 inheritableThreadLocals 传递给子线程，可以通过阿里的 TransmittableThreadLocal 组件解决
+
+### ThreadLocalMap 扩容
+
+set() 方法最后执行完启发式清理后未清理任何数据，且当前散列数组中 Entry 的数量已达到 len * 2/3，则开始 rehash()
+
+```java
+private void rehash() {
+    // 探测式清理
+    expungeStaleEntries();
+
+    // 再次判断阈值
+    if (size >= threshold - threshold / 4)
+        resize();
+}
+
+private void expungeStaleEntries() {
+    Entry[] tab = table;
+    int len = tab.length;
+    for (int j = 0; j < len; j++) {
+        Entry e = tab[j];
+        if (e != null && e.get() == null)
+            expungeStaleEntry(j);
+    }
+}
+```
+
+扩容后的 tab 的大小为 oldLen * 2，然后遍历老的散列表，重新计算 hash 位置，然后放到新的 tab 数组中，如果出现 hash 冲突则往后寻找最近的 entry 为 null 的槽位，遍历完成后，oldTab 中所有的 entry 数据都已经放入到新的 tab 中
+
+### ThreadLocalMap.get()
+
+- 查找 key 值计算出散列表中 slot 位置
+  - key 一致：直接返回
+  - key 不一致：往后迭代查找
+    - 找到一致的返回
+    - 找到 key == null：进行一次探测式过期数据回收，继续往后迭代查找，若找到 Entry == null，说明 key 不存在
+
 ### ThreadLocal 内存泄漏
 
-#### 弱引用
+#### 引用类型
 
-只具有弱引用的对象拥有比软引用更短的生命周期，在垃圾回收线程扫描它管辖的内存区域时，一旦发现了只具有弱引用的对象，不管当前内存空间是否足够，都会回收
-
-将弱引用和一个引用队列联合使用，当弱引用所引用的对象被垃圾回收，JVM 就会把这个弱引用加入到与之关联的引用队列中
-
-#### 强引用
-
-只要对象具有强引用，该对象就不能被回收
+- 强引用：只要存在强引用，垃圾回收器就永远不会回收被引用的对象
+- 软引用：对象只有在内存要溢出时回收
+- 弱引用：当对象只有弱引用时，会被垃圾回收器回收(只要 GC 发生)
+- 虚引用：唯一的作用是用队列接收对象即将死亡的通知
 
 #### 内存泄漏原因
 
 ThreadLocalMap 中的 key 是 ThreadLocal 的弱引用，value 是强引用，故当 ThreadLocalMap 没有被外部强引用的情况下，在垃圾回收时，key 会被清理掉，value 不会。此时会产生 key 为 null 的 Entry，GC 回收无法辨别，相应的内存就被泄漏
 
-key 为弱引用：ThreadLocalMap 与线程绑定，若 key 为强引用，则当对应的 ThreadLocal 不再被使用时也不会回收，其对应的 value 对象也会随线程一直存在，直到线程销毁。将 key 设置为弱引用就可以保证不再用到的 ThreadLocal 会被及时回收
+**key 为弱引用：为了正常回收不再被使用的 ThreadLocal 对象。**ThreadLocalMap 与线程绑定，若 key 为强引用，则当对应的 ThreadLocal 不再被使用时也不会回收，其对应的 value 对象也会随线程一直存在，直到线程销毁。将 key 设置为弱引用就可以保证不再用到的 ThreadLocal 会被及时回收
 
 value 为强引用：若 value 为弱引用，则当其 Object 对象不存在外部强引用时就会被 GC 回收，此时 key 的 ThreadLocal 还存在，就会产生获取结果为 null 的情况
 
