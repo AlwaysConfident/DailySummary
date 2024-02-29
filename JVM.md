@@ -72,27 +72,65 @@ Java 程序通过栈上的 reference 数据来操作堆上的具体对象，对�
    1. 检查：检查类是否符合 JVM 规范，类方法是否会产生危害 JVM 的行为，包含文件格式(.class 文件)、元数据(字节码语义)、字节码(程序语义)、符号引用(类的正确性)验证，其中除了文件格式验证基于类的二进制字节流进行，保证输入的字节流能正确地解析并存储于方法区，其余三个都是基于方法区的存储结构进行
       - 对信任的代码可以使用 -Xverify:none 参数关闭大部分的类验证措施，以缩短虚拟机类加载时间
    2. 准备：类静态变量的内存分配与初始化(默认值)
+      - 在 Java 7 及之前内存分配至方法区的永久代中，在 Java 8 后分配至堆中的静态变量
    3. 解析：将常量池内的符号引用(字面量)替换为实际引用(即将 apple 替换为对象实际的内存地址)
-3. 初始化：顺序执行
-   1. 静态变量的显示初始化
-   2. 静态代码块
-   3. 父类构造函数
-   4. 子类构造函数
+3. 初始化：执行初始化方法 `<clinit>()`，由 JVM 保证线程安全(难以发现的阻塞)，只有以下 6 种情况才会初始化类
+   - new、getstatic、putstatic、invokestatic 四条字节码指令
+     - new：创建类的实例对象
+     - getstatic：访问类的静态变量(静态常量会存储到运行时常量池，此处为类的静态变量)
+     - putstatic：给类的静态变量赋值
+     - invokestatic：调用类的静态方法
+   - 反射：对类进行反射调用(Class.forName、newInstance)
+   - 父类未初始化
+   - JVM 启动时，用户需要定义一个要执行的主类(main 入口)，JVM 会先初始化这个类
+   - MethodHandle 和 VarHandle 可以看作轻量级的反射调用机制，使用前要先用 findStaticVarHandle 来初始化要调用的类
+   - 接口中定义了 Java 8 新加入的默认方法(default)，该接口的实现类初始化时，接口要在其之前被初始化
 4. 使用
 5. 卸载：GC 回收
+   - 实例：类的实例对象都被回收
+   - Class 对象：类的 Class 对象被回收(不可通过反射再生成实例)
+   - 类加载器：类加载器的实例被回收
 
 ### 类加载器的加载顺序
 
-1. BootStrap：根加载器
-2. Extension：扩展加载器
-3. App：指定 classpath 的加载器
-4. Custom：自定义加载器
+1. Bootstrap：启动类加载器，主要用于加载 JDK 内部的核心类库
+   - %JAVA_HOME%/lib 目录下的 rt.jar、resources.jar、charsets.jar 等 jar 包和类
+     - rt.jar 表示 runtime，是 Java 基础类库
+   - 被 -Xbootclasspath 参数指定的路径下的所有类
+2. Extension：扩展类加载器，Java 9 中引入模块系统，扩展类加载器改名为平台类加载器(platform class loader)，Java SE 中除了少数几个关键模块(java.base)由启动类加载器加载，其他模块均由平台类加载器加载
+   - %JRE_HOME%/lib/ext 目录下的 jar 包和类
+   - java.ext.dirs 系统变量所指定的路径下的所有类
+3. App：当前应用 classpath 下所有 jar 包和类的加载器
+4. Custom：自定义加载器，可以通过重写 loadClass(String name, boolean resolve) 方法打破双亲委派机制
+
+除了 BootstrapClassLoader 是 JVM 的一部分(由 C++ 实现)外，其他所有类加载器都是在 JVM 外部实现的，且都继承自 ClassLoader 抽象类
 
 ### 双亲委派机制
 
 在一个类需要加载时，首先调用底层的类加载器(根加载器，加载器的父类)，若无法加载再逐层调用子加载器
 
 由此可以确保不同的类加载器加载的结果一致，且用户自定义的类不会覆盖 JDK 自身的类
+
+不同的类：全类名与类加载器都不同
+
+1. 判断类是否已被加载
+2. 调用父加载器(由组合实现) loadClass() 方法来加载类，即所有请求最终都传送到启动类加载器
+3. 父加载器无法完成加载请求时，子加载器才尝试去加载
+4. 子加载器也无法加载时抛出 ClassNotFoundException 异常
+
+#### 父类加载器依赖子类加载器完成加载
+
+单纯依靠自定义类加载器无法满足某些场景的要求，有些情况下高层的类加载器需要加载低层的加载器才能加载类
+
+如：Spring 的 jar 包是 Web 应用间共享的，因此由 SharedClassLoader 加载(Web 服务器为 Tomcat)。项目中用到了 Spring 的业务类(实现 Spring 提供的接口、用到 Spring 提供的注解)，此时加载 Spring 的类加载器(SharedClassLoader)也会用于加载这些业务类。但业务类处于 Web 应用目录下，SharedClassLoader 无法找到，即无法加载。
+
+故 Spring 加载业务类时，不使用自己的类加载器，而是用当前线程的上下文类加载器。每个 Web 应用都会创建一个单独的 WebAppClassLoader(Tomcat)，并在启动 Web 应用的线程里设置线程上下文类加载器为 WebAppClassLoader。高层的类加载器(SharedClassLoader)由此可以借助子类加载器(WebAppClassLoader)来加载业务类，破坏了双亲委派机制
+
+#### 线程上下文类加载器
+
+将一个类加载器保存在线程私有数据中，跟线程绑定，在需要时取出使用，该类加载器通常是由应用程序或容器(Tomcat)设置
+
+Java.lang.Thread 中的 getContextClassLoader() 和 setContextClassLoader(ClassLoader cl) 分别用于获取和设置线程的上下文类加载器。若没有通过 setContextClassLoader(ClassLoader cl) 进行设置，则会直接继承父线程的上下文类加载器
 
 ## 运行时方法区
 
@@ -380,3 +418,135 @@ Garbage-First 是一款面向服务器的垃圾收集器，主要针对配备多
 通过改进标记-复制算法，令 STW 的情况更少
 
 ## JVM 调优
+
+### 堆内存
+
+#### 显示指定堆内存 -Xms 和 -Xmx
+
+根据应用程序要求初始化堆内存
+
+- -Xms：最小堆大小 -Xms2G
+- -Xmx：最大堆大小 -Xmx5G
+
+#### 显式指定新生代内存大小
+
+在堆总可用内存配置完成之后，第二大影响因素是新生代在堆内存所占比例
+
+默认情况下，新生代最小为 1310MB，最大无限制
+
+- -XX:NewSize 与 -XX:MaxNewSize 指定：
+
+  ```bash
+  -XX:NewSize=256m 
+  -XX:MaxNewSize=1024m
+  ```
+
+- -Xmn 指定：NewSize == MaxNewSize
+
+  ```bash
+  -Xmn<young size>[unit]
+  -Xmn256m
+  ```
+
+因为 Full GC 的开销远大于 Mirror GC，故应尽量将新创建的对象存放在新生代。根据 GC 日志分析新生代大小是否合理，通过 -Xmn 调整新生代大小来减少新对象直接进入老年代的情况
+
+- -XX:NewRatio 用于设置老年代与新生代的比例
+
+#### 显示指定永久代/元空间大小
+
+元空间直接使用系统内存，且默认无上限，故频繁创建类可能会耗尽系统内存
+
+- 永久代：
+
+  ```bash
+  -XX:PermSize=N # 方法区(永久代)初始大小
+  -XX:MaxPermSize=N # 方法区(永久代)最大大小
+  ```
+
+- 元空间：
+
+  ```bash
+  -XX:MetaspaceSize=N # 元空间的初始大小是固定的，该参数用于设置元空间发生 Full GC 的阈值
+  -XX:MaxMetaspaceSize=N # 元空间的最大大小
+  ```
+
+### 垃圾收集
+
+#### 垃圾回收器
+
+定义 JVM 使用的垃圾回收器
+
+```bash
+-XX:+UseSerialGC
+-XX:+UseParallelGC
+-XX:+UseParNewGC
+-XX:+UseG1GC
+```
+
+#### GC 日志
+
+生产环境，或测试 GC 问题的环境上，会配置打印 GC 日志的参数，便于分析 GC 相关问题
+
+```bash
+# 必选
+# 打印基本 GC 信息
+-XX:+PrintGCDetails
+-XX:+PrintGCDateStamps
+# 打印对象分布
+-XX:+PrintTenuringDistribution
+# 打印堆数据
+-XX:+PrintHeapAtGC
+# 打印Reference处理信息
+# 强引用/弱引用/软引用/虚引用/finalize 相关的方法
+-XX:+PrintReferenceGC
+# 打印STW时间
+-XX:+PrintGCApplicationStoppedTime
+
+# 可选
+# 打印safepoint信息，进入 STW 阶段之前，需要要找到一个合适的 safepoint
+-XX:+PrintSafepointStatistics
+-XX:PrintSafepointStatisticsCount=1
+
+# GC日志输出的文件路径
+-Xloggc:/path/to/gc-%t.log
+# 开启日志文件分割
+-XX:+UseGCLogFileRotation
+# 最多分割几个文件，超过之后从头文件开始写
+-XX:NumberOfGCLogFiles=14
+# 每个文件上限大小，超过就触发分割
+-XX:GCLogFileSize=50M
+```
+
+### 处理 OOM
+
+JVM 提供了一些参数将堆内存转储到一个物理文件中，以后可以用来查找泄漏
+
+```bash
+-XX:+HeapDumpOnOutOfMemoryError # JVM 在遇到 OOM 时将 heap 转储到物理文件
+-XX:HeapDumpPath=./java_pid<pid>.hprof # 表示要写入的文件，若 JVM 在名称中找到一个 <pid> 标记，则当前进程的进程 id 将附加到文件名中，并使用 .hprof 格式
+-XX:OnOutOfMemoryError="< cmd args >;< cmd args>" # 用于发出紧急命令，以便在内存不足的情况下执行，如 -XX:OnOutOfMemoryError="shutdown-r" 在 OOM 时重启服务器
+-XX:+UseGCOverheadLimit # 限制在抛出 OOM 之前在 GC 中花费的 VM 时间比例
+```
+
+### 其他
+
+- `-server` : 启用“ Server Hotspot VM”; 此参数默认用于 64 位 JVM
+- `-XX:+UseStringDeduplication` : _Java 8u20_ 引入了这个 JVM 参数，通过创建太多相同 String 的实例来减少不必要的内存使用; 这通过将重复 String 值减少为单个全局 `char []` 数组来优化堆内存。
+- `-XX:+UseLWPSynchronization`: 设置基于 LWP (轻量级进程)的同步策略，而不是基于线程的同步。
+- `-XX:LargePageSizeInBytes`: 设置用于 Java 堆的较大页面大小; 它采用 GB/MB/KB 的参数; 页面大小越大，我们可以更好地利用虚拟内存硬件资源; 然而，这可能会导致 PermGen 的空间大小更大，这反过来又会迫使 Java 堆空间的大小减小。
+- `-XX:MaxHeapFreeRatio` : 设置 GC 后, 堆空闲的最大百分比，以避免收缩。
+- `-XX:SurvivorRatio` : eden/survivor 空间的比例, 例如`-XX:SurvivorRatio=6` 设置每个 survivor 和 eden 之间的比例为 1:6。
+- `-XX:+UseLargePages` : 如果系统支持，则使用大页面内存; 请注意，如果使用这个 JVM 参数，OpenJDK 7 可能会崩溃。
+- `-XX:+UseStringCache` : 启用 String 池中可用的常用分配字符串的缓存。
+- `-XX:+UseCompressedStrings` : 对 String 对象使用 `byte []` 类型，该类型可以用纯 ASCII 格式表示。
+- `-XX:+OptimizeStringConcat` : 它尽可能优化字符串串联操作。
+
+## JDK 命令行工具
+
+- jps：查看所有 Java 进程
+- jstat：监视虚拟机各种运行状态，可以显示本地/远程虚拟机进程中的类信息、内存、垃圾收集、JIT 编译等运行数据
+- jinfo：实时查看和调整虚拟机各项参数
+- jmap：生成堆转储快照
+- jhat：分析 heapdump 文件
+- jstack：生成虚拟机当前时刻的线程快照，定位线程长时间出现停顿的原因(线程间死锁、死循环、请求外部资源)，通过 jstack 查看各个线程的调用堆栈，可以知道未响应的线程在后台做什么/等待什么
+
