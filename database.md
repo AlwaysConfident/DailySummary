@@ -358,6 +358,137 @@ select * 不会导致索引失效(where 查询范围过大时会导致失效)，
 
 ### 日志
 
+- 错误日志：记录 MySQL 的启动、运行、关闭过程
+- 二进制日志：binary log 记录更改数据库数据的 SQL 语句
+- 一般查询日志：已建立连接的客户端发送给服务器的所有 SQL 记录，默认关闭(量比较大)
+- 慢查询日志：记录执行时间超过阈值或没有使用索引的查询，解决 SQL 慢查询问题，默认关闭(实际项目中可能比较大)
+- 事务日志：重做日志(redo log)，回滚日志(undo log)
+- 中继日志：relay log 是复制过程中产生的日志，类似 binary log，主要针对主从复制的从库
+- DDL 日志：记录 DDL 语句执行的元数据操作
+
+#### 慢查询日志
+
+记录执行时间超过阈值的查询，找到慢 SQL 是优化的第一步
+
+```sql
+-- 通过以下命令查看慢日志
+show global status like '%Slow_queries%'
+```
+
+获取到慢 SQL 后，可以通过 EXPLAIN 命令获取执行计划相关信息，再根据其结果进行优化
+
+#### binlog
+
+二进制日志主要记录更新数据库数据的 SQL 语句(所有 DDL 和 DML 语句，不包括 SELECT/SHOW 等不修改数据库的语句)
+
+```sql
+-- 通过一下命令查看 binlog
+show binary logs;
+```
+
+使用 MySQL 内置的 binlog 查看工具 mysqlbinlog 解析二进制文件
+
+binlog 通过追加方式写入，大小没有限制，通过 max_binlog_size 参数设置每个文件最大容量，超出后会新增文件
+
+##### 记录方式
+
+一共有三种类型的二进制记录方式：
+
+- Statement：记录每条会修改数据库的语句，MySQL 5.7.7 前默认为 Statement
+  - 日志文件更小，磁盘 IO 压力较小，性能更好，但准确性更低
+- Row：记录每一行的具体变更事件，MySQL 5.1.5 开始支持
+  - 若一条 SQL 语句修改了 1000 条数据，Statement 只会记录一条 SQL 语句，Row 则会记录 1000 条修改记录
+- Mixed：默认使用 Statement，少数特殊具体场景切换到 Row，MySQL 5.1.8 开始支持，MySQL 5.7.7 之后默认为 Mixed
+
+##### 应用场景
+
+binlog 主要用于主从复制，保证数据一致性，也可以用于数据恢复
+
+主从复制：
+
+![](https://pic4.zhimg.com/v2-12f36a0aa2ea88020809173182e54e73_r.jpg)
+
+1. 主库将数据库中的变化写入 binlog
+2. 从库连接主库
+3. 从库创建 IO 线程向主库请求更新的 binlog
+4. 主库创建一个 binlog dump 线程发送 binlog 由从库的 IO 线程接收
+5. 从库的 IO 线程将接收的 binlog 写入 relay log 中
+6. 从库的 SQL 线程读取 relay log 同步到本地数据(再执行一次 SQL)
+
+##### binlog 写入磁盘
+
+事务在执行过程中，会先把日志写入内存中的 binlog cache，只有事务提交时才真正写回磁盘中的 binlog(事务会回滚，且写入内存的效率更高)
+
+由于事务的原子性，无论多大的事务都需要一次性写入 binlog，故当分配的 binlog cache 不足时，会将存储内容暂存到磁盘
+
+binlog 写回磁盘的时机分为 0-N：
+
+- 0：不强制要求，系统自行判断，MySQL 5.7 前默认为 0
+- 1：每次提交事务都将 binlog 写回磁盘，MySQL 5.7 后默认为 1
+- N：每提交 N 个事务才将 binlog 写回磁盘，有丢失的风险
+
+##### 重写生成 binlog
+
+- MySQL 服务器停止或重启
+- 使用 flush logs 命令
+- binlog 文件大小超出限制
+
+#### redo log
+
+InnoDB 以页为单位管理存储空间，即数据存储在页中
+
+为了减少磁盘 IO，在内存中使用 Buffer Pool 缓冲池，当数据不在 Buffer Pool 中时，MySQL 会先将磁盘上的页缓存到 Buffer Pool 中，之后的操作也基于 Buffer Pool 中的页，提高读写性能
+
+当事务提交至 Buffer Pool，还未写回磁盘时，MySQL 宕机，此时需要 redo log 来维护数据的持久性
+
+redo log 记录页的修改，每一条记录包含表空间号、数据页号、偏移量、具体修改的数据，在事务提交时会将 redo log 按照写回磁盘的策略写到磁盘中，MySQL 故障重启后也能根据 redo log 恢复未写入的数据，即 redo log 提供了崩溃恢复的功能
+
+![](https://pic2.zhimg.com/80/v2-8b45c811e7502bb04f0a370615380875_720w.webp)
+
+redo log 写回磁盘的时机：
+
+- 事务提交：事务提交时，log buffer 中的 redo log 会被写入磁盘
+- log buffer 空间不足：log buffer 中缓存的 redo log 占据 log buffer 一半左右的空间时
+- 事务日志缓存区满：InnoDB 使用事务日志缓冲区(transaction log buffer)来暂时存储事务的重做日志条目
+- Checkpoint：InnoDB 定期执行检查点操作，将内存中的脏数据(已修改，未写回磁盘)写入到磁盘，同时将 redo log 写回磁盘保证数据的一致性
+- 后台刷新线程：InnoDB 后台线程周期性地将脏页写回磁盘，并将相关的 redo log 写回磁盘，即未提交事务的 redo log 也可能写回磁盘
+- 正常关闭服务器：MySQL 关闭时，redo log 会全部写回磁盘
+
+redo log 写回磁盘的策略：
+
+- 0：每次事务提交时不写回磁盘，性能最高，但最容易丢失信息
+- 1：每次事务提交时都写回磁盘，性能最低，但最安全，默认为 1
+- 2：每次事务提交时将 log buffer 中的 redo log 写入 page cache(文件系统缓存)
+
+当 redo log 写入 log buffer 还未写入 page cache，或写入 page cache 还未写入磁盘时都可能发生丢失
+
+redo log 采用循环写入的方式：
+
+![](https://pic3.zhimg.com/80/v2-80c7219fb4a27e55110b8d6a0e3ee632_720w.webp)
+
+write pos 表示 redo log 当前记录写到的位置，checkpoint 表示 redo log当前要写回磁盘的位置，当  write pos 追上 checkpoint 时表示 redo log 文件被写满，此时 MySQL 会阻塞所有数据库更新操作(无法写入 redo log)
+
+##### 页修改后不直接写入磁盘
+
+InnoDB 中的页比较大，可能只修改几个字节就要导致整个页都重新写入磁盘，且修改的页可能不相邻，若每次修改页都直接写回磁盘，则会产生大量的随机磁盘 IO，导致性能极差
+
+redo log 的写入是顺序的磁盘 IO，且 redo log 相比页较小
+
+#### binlog vs redo log
+
+- 用途：binlog 用于还原数据库，属于数据级别的数据恢复，主要用于主从复制；redo log 主要用于保证事务的持久性，属于事务级别的数据恢复
+- 实现：binlog 由存储引擎实现(InnoDB)；redo log 由 MySQL 的 Server 层实现
+- 类型：binlog 属于逻辑日志，主要记录数据库执行的 DDL 与 DML 语句；redo log 属于物理日志，主要记录页的修改
+- 文件大小：binlog 文件默认无上限，会一直追加；redo log 采用循环写方式，当写满时会阻塞所有更新操作
+
+#### undo log
+
+每个事务对数据的修改都会被记录到 undo log，当执行事务需要回滚时，MySQL 可以利用 undo log 将数据恢复到事务开始前的状态
+
+undo log 属于逻辑日志，记录 SQL 语句，如事务执行一条 DELETE 语句，undo log 就会记录一条 INSERT 语句
+
+MVCC 中也使用 undo log 获取当前数据行之前的版本信息(非锁定读取)
+
 ### 事务
 
 事务是逻辑上的一组操作，要么都执行，要么都不执行
