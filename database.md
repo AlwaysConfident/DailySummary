@@ -1613,7 +1613,195 @@ config set active-defrag-threshold-lower 50
     - 降低 swap 优先级
 - 网络阻塞：连接拒绝，网络延迟
 
-### Redis 集群
+### Redis 高可用
+
+#### 主从复制
+
+主从复制方案基于 Redis replication(异步复制)
+
+```bash
+# 指定 redis 节点上执行 replicaof 命令让其成为 master 的 slave
+# ip port 为 master
+relicaof ip port
+```
+
+配置完成后主从节点的数据同步会自动进行
+
+主从复制能提高读操作的吞吐量与并发量
+
+##### 删除过期数据
+
+- 惰性删除
+- 定期删除
+
+客户端读取从节点时的过期数据问题：
+
+- Redis 3.2 前从库不会判断过期数据，可能返回过期数据
+- Redis 3.2 后从库会先判断数据过期，过期删除并返回空
+- 使用 EXPIRE/PEXPIRE 设置过期时间，表示从执行这个命令开始往后 TTL 时间过期，若从节点同步执行命令因为网络等原因延迟，则会导致客户端读取到过期数据：
+  1. 主节点在 T1 时刻写入数据
+  2. 数据在 T2 时刻完全同步到从节点(网络延迟)
+  3. 主节点数据在 T3 时刻过期，则 TTL 为 (T3 - T1)
+  4. 从节点数据需要同样的 TTL 才会过期，即 T4 = (T2 + T3 - T1)，此时从节点会存放过期数据
+- 使用 EXPIREAT/PEXPIREAT，表示到达指定时间戳后过期，需要主从节点的时钟保持一致
+
+##### 主从同步
+
+- Redis 2.8 前的 SYNC 方案：
+  - 流程：基于 RDB 和长连接
+    1. slave → master 发送 SYNC 请求
+    2. master 执行 bgsave 命令生成 RDB
+    3. master → slave 返回 RDB
+    4. slave 接收 RDB 并开始解析同步数据
+    5. master → slave 将生成 RDB 过程中缓存的写操作命令发送
+    6. slave 接收命令并执行，完成全量更新
+    7. master → slave 主节点维护长连接，同步更新写操作
+  - 问题：
+    - bgsave 需要 COW 保证生成 RDB 文件时发生的写操作不会造成数据一致性问题，即保证 bgsave 只能读取到命令执行发生之前的数据，在频繁的写操作场景，COW 会生成大量数据副本，耗费 CPU 与内存资源
+    - slave 加载 RDB 时会阻塞读请求
+    - slave ←→ master 连接中断后需要重新建立并进行全量同步(bgsave)
+- Redis 2.8 的 PSYNC 方案：
+  - 流程：在 SYNC 的基础上新增了replicationid 和 offset 参数，缓解了每次主从连接都需要全量同步的问题(部分情况仍需要全量同步)
+    - slave 记录 master 的 runid 与自身的复制进度 slave_repl_offset
+    - master 维护自身的缓冲池 master_repl_offset
+    - 当 slave 与 master 的 runid 匹配时，可通过 slave_repl_offset 与 master_repl_offset 的差值进行增量更新
+      - master 将从生成 RDB 开始的所有写操作记入 repl_backlog_buffer 缓冲区，若 slave 缺失的数据存在，则直接返回缓存数据，否则需要全量更新
+  - 问题：仍未完全解决全量同步的问题
+    - slave 关闭后丢失 runid
+    - slave 缺失的数据未命中 repl_backlog_buffer
+    - master 故障，新选出的 master 的 runid 与 master_repl_offset 也不同，但 repl_backlog_buffer 是由 master 和所有 slave 共享的
+- Redis 4.0 & PSYNC 2.0
+  - 流程：使用 replid 与 replid2 替代 runid，引入 second_replid_offset，避免主从转换后需要全量更新
+    - master：
+      - replid → 自身的复制 id
+      - replid2 → 之前的 master 的复制 id，未发生主从转换则为空
+      - second_replid_offset → 之前的 master 的复制偏移量，未发生主从转换则为 -1
+    - slave：
+      - replid → 当前 master 的复制 id
+      - replid2 → 前一个同步的 master 的复制 id
+      - second_replid_offset
+    - 发生主从转换后对比 replid 与 replid2，若新旧 master 属于同一个主库，则可以直接进行增量更新
+
+RDB vs AOF：
+
+- RDB 存储的二进制数据更小，且解析后即可使用，不需要额外的执行开销，在数据量较大的情况下，网络传输、数据恢复的开销更小，速度更快
+
+#### Redis Sentinel
+
+主从复制方案的故障切换开销：在 master 崩溃后需要选择升级的 slave，同时修改所有 slave 的配置以应用新的 master
+
+Redis Sentinel 用于实现自动化故障转移，是一种依赖于 Redis 的运行模式，使用专门的命令表(在 Redis Sentinel 模式下无法使用普通的 Redis 命令)
+
+在主从复制实现集群的基础上，加入 Sentinel 角色来监控 Redis 节点运行状态并自动实现故障转移
+
+功能：
+
+- 监控：监控所有 Reids 节点的运行状态，包括自身
+  - Sentinel 节点为分布式，由多个 Sentinel 共同投票决定给定的节点是否不可用，降低由于网络延迟等原因导致的误判
+- 故障转移：当主节点发生故障时，自动选择从节点进行升级
+- 通知：主节点更换时，通知所有从节点使用 replicaof 命令成为新主节点的从节点
+- 配置：将客户端的主节点连接配置更新
+
+##### 检测节点下线
+
+- 主观下线：当前 Sentinel 节点认为该节点已下线
+- 客观下线：超过设定值的 Sentinel 节点认为该节点已下线
+
+流程：
+
+1. Sentinel 节点向集群内所有节点(master/slave/Sentinel)每秒发送一次 ping 命令，若有节点在指定时间内无有效返回，则认为该节点主观下线
+2. 若主观下线的节点为 slave，则不进行操作，slave 下线对集群影响不大
+3. 若主观下线的节点为 master，则需要进一步核实，所有 Sentinel 节点都以每秒一次的频率向 master 发送 ping 命令
+4. 当超过阈值的 Sentinel 节点主观认定 master 已下线，则由 Leader 进行故障转移操作
+5. 若未达到客观下线操作，则 Sentinel 节点收到 master 响应时取消主观下线的状态
+
+##### master 选举
+
+Leader 选择升级的 slave 时，首先筛选出所有在线的 slave，再由以下标准逐层筛选：
+
+1. slave 优先级：slave 节点可以由人工设定的优先级来从中选择用于升级的节点，优先级为 0 的 slave 不会被考虑
+2. 复制进度：为了提高故障转移效率，在优先级相同的情况下，会尽量选择与原 master 数据最相近的 slave，通过比较偏移量 slave_repl_offset
+3. 运行 id：在前两者相同的情况下，选择运行 id 最小的 slave，运行 id 由节点启动时随机生成 
+
+Sentinel 通过基于 Raft 算法实现分布式共识算法选出 Leader
+
+##### Sentinel 防止脑裂
+
+脑裂指分布式系统中的节点失去一致性，导致数据不一致和系统不可用
+
+例子：
+
+1. 原本 (M1, R2, R3) 处于一个网络分区，客户端 C1 与 M1 连接
+2. 出现网络故障，导致分裂为 (M1) 与 (R2, R3) 两个网络分区
+3. 此时 (R2, R3) 认为 M1 客观下线，选举出新的主节点
+4. M1 接收 C1 的写操作，但由于网络分区无法将写操作同步给 (R2, R3)，(R2, R3) 中的写操作也无法同步给 M1，导致 C1 读取过期数据
+5. 当网络分区恢复后，M1 会成为新主节点的 slave，丢失之前 C1 的所有写操作
+
+解决方案：增加配置，令 master 维护与其连接的 slave，保证 master 一定与 slave 处于同一网络分区时才正常工作，即只解决了脑裂导致的数据不一致问题，需要引入其他工具/机制彻底防止脑裂发生
+
+- min-replicas-wirte：限制 master 至少与多少个 slave 连接，即 master 的写操作至少应同步到 n 个 slave，否则停止接收写操作请求
+- min-replicas-lag：配置 master 最久多长时间未从一个 slave 接收响应，超时则认为该 master 与所有 slave 失联，停止接收写操作请求
+
+会降低 Redis 整体可用性，即 slave 下线会导致 master 不可用，即使未发生脑裂
+
+### Redis Cluster
+
+主从复制，Redis Sentinel 都通过增加主从库来提高系统的吞吐量与并发量，但无法通过水平扩展增加数据存储量与缓解写压力，本质上是通过数据冗余提高效率，写操作与数据存储仍然集中在主节点
+
+Redis 切片集群通过建立多个平等的主节点，数据相对均匀地分布在所有切片，客户端的请求通过路由规则转发到数据所在的主节点，增大数据存储量与缓解写压力，同时便于进行水平扩展，只需要将 Redis 节点加入集群即可
+
+Redis 3.0 官方推出的分片集群解决方案：
+
+- 通过分片进行数据管理
+- 提供主从复制、故障转移等功能
+  - 从节点不提供服务，只负责备份
+- 便于水平扩展，能够动态地新增/删除节点
+
+#### 架构
+
+Redis Cluster 至少需要 3 个 master，且每个 master 至少有一个 slave
+
+每个 slave 不对外提供服务，只负责实时同步 master 的写操作，当 master 故障时进行替换，存在多个 slave 时会选择数据最接近的 slave
+
+Redis Cluster 去中心化，基于 Gossip 协议进行节点间通信，请求的 key 只会找对应的 hash slot，而不需要特定的 master，故只要存在能够替换的 slave，即使单个 master 下线也不会影响集群的正常使用
+
+但当 hash slot 对应的节点不存在可以替换的 slave 时，由于节点保存的数据不可用，会导致集群不可用，即集群正常工作需要保证所有 hash slot 都被指派了可用的节点
+
+每次扩容都需要重新分配哈希槽，缩容则需要先将存储的数据转移至其他 hash slot 中再删除
+
+#### 分片
+
+Redis Cluster 不是使用一致性哈希，而使用哈希槽分区进行 key 的分片，解耦数据与节点之间的关系，由 hash → 节点变为 hash → hash slot → 节点，增加了横向扩展性与容错
+
+客户端发送相关 key 的请求时，会先计算 key 对应的 hash slot：
+
+1. 对 key 进行 CRC 计算，得到校验值
+2. 校验值对 hash slot 个数(2 ^ 14)进行取余得到对应的槽位
+   - 2 ^ 14：
+     - 节点间通信的心跳包(ping)会携带完整的哈希槽信息，过大的哈希槽会造成额外的内存开销
+     - 2 ^ 14 能够容纳 2048 个节点(2 ^ 14 / 8，每个 char 占 1 byte，8 bit，哈希槽底层为 char[])，Redis Cluster 一般不会容纳超过 1k 节点
+     - 使用 bitmap 维护哈希槽信息时，若哈希槽过大会导致 bitmap 的填充率(哈希槽总数 / 节点数)过大
+3. 根据槽位 → 节点的对应表将请求发送到相应的节点
+   - Redis 哈希槽分配信息通过节点间的定期通信进行更新
+   - 客户端通过与任意节点连接获取存储在节点上的对应表
+
+即 hash slot = CRC(key) % num
+
+由于 Redis Cluster 会动态进行扩容/缩容，收到请求的节点会校验请求的 key 是否存储在该节点，若不存在则返回报错(-moved)与正确的节点信息，客户端收到报错后会更新缓存的对应表
+
+#### 扩容/缩容
+
+Redis Cluster 进行扩容/缩容时，为了保证正常对外服务，使用两种重定向机制：
+
+- ACK：临时重定向，请求会一直发向旧节点
+  - 流程：
+    1. 客户端向旧节点发送请求
+    2. 若 hash slot 已迁移，但请求的 key 仍未迁移，即旧节点仍能处理请求，则直接返回
+    3. 若 key 也迁移，则旧节点会返回新节点所在的 ACK 响应
+    4. 客户端收到 ACK 响应会向新节点发送 ACK 请求，但==不会更新缓存的 hash slot 信息==
+    5. 新节点收到 ACK 请求会强制执行下一次请求，若此时 key 处于迁移途中，则返回 tryagain 报错
+    6. 客户端向新节点发送真正的请求命令
+- MOVED：永久重定向，请求会一直发向新节点
 
 ### Redis 使用规范
 
