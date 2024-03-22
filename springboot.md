@@ -206,7 +206,9 @@ bean 的线程安全取决于其作用域和状态，大多数 bean 都是无状
 
 面向切面编程，将业务模块中与业务无关的共同调用的逻辑(事务管理、业务管理、权限控制)封装起来，减少系统的重复代码、降低模块间耦合度
 
-Spring AOP 基于动态代理实现，当被代理的对象实现了接口，则使用 JDK Proxy 创建代理对象，否则利用 CGLIB 创建被代理对象的子类
+==Spring AOP 基于动态代理实现，属于运行时增强==，当被代理的对象实现了接口，则使用 JDK Proxy 创建代理对象，否则利用 CGLIB 创建被代理对象的子类
+
+AspectJ AOP 是 Java 生态中的 AOP 框架，==基于字节码操作进行编译时增强==，比 Spring AOP 更强大也更复杂，适用于切面较多的场景
 
 ![SpringAOPProcess](https://oss.javaguide.cn/github/javaguide/system-design/framework/spring/230ae587a322d6e4d09510161987d346.jpeg)
 
@@ -215,7 +217,275 @@ Spring AOP 基于动态代理实现，当被代理的对象实现了接口，则
 - 目标(Target)：被增强的对象
 - 代理(Proxy)：向目标对象应用增强(Advice)后创建的代理对象
 - 连接点(JoinPoint)：目标对象的所属类中，定义的所有方法均为连接点
-- 切入点(Pointcut)：被切面增强的连接点
+- 切入点(Pointcut)：需要被增强的连接点
 - 增强(Advice)：用于增强的逻辑，即拦截到目标对象后进行的操作
 - 切面(Aspect)：切入点 + 增强
 - 织入(Weaving)：将增强应用到目标对象，进而生成代理对象的操作
+
+### AOP vs OOP
+
+AOP 是 OOP 的一个补充，两者并不对立，OOP 难以处理多个对象中的公共行为，需要重复实现，且不利于扩展和维护，修改公共方法也需要修改业务代码
+
+- AOP：将与具体业务逻辑无关，但被多个业务共享的代码/服务(事务管理、日志管理)通过动态代理或字节码操作进行提取封装，降低代码耦合度，提高可维护性
+- OOP：将业务逻辑按照对象的属性和行为进行封装，通过继承、封装、多态等概念，实现代码的模块化和层次化，提高代码的可读性和可维护性
+
+### AspectJ 通知类型
+
+- Before：目标对象方法调用前
+- After：目标对象方法调用后
+- AfterReturning：目标对象方法调用完成，在返回结果后
+- AfterThrowing：目标对象方法运行中抛出异常后触发，与 AfterReturning 互斥，即会抛出异常则不会正常返回
+- Around：可以直接拿到目标对象以及要执行的方法，任意地在目标对象的方法调用前后增强，甚至不需要调用方法
+
+### 切面执行顺序
+
+- @Order 注解直接定义切面顺序，@Order(n) 值越小优先级越高
+- 实现 Ordered 接口重写 getOrder 方法
+
+## Spring MVC
+
+MVC 的核心思想是将业务逻辑、数据、视图分离来组织代码
+
+### 核心组件
+
+- DispatcherServlet：核心的中央处理器，负责接收请求、分发、响应
+- HandlerMapping：处理器映射器，URL → Handler，将请求用到的拦截器与 Handler 封装
+- HandlerAdapter：处理器适配器，根据 HandlerMapping 映射的 Handler，适配执行对应的 Handler
+- Handler：请求处理器，实际处理请求
+- ViewResolver：视图解析器，将 Hander 返回的逻辑视图解析并渲染为真正的视图，传递给 DispatcherServlet 响应客户端
+
+### 工作原理
+
+![](https://img-blog.csdnimg.cn/87caa037d8584c559b014e7ca8e36a27.png?x-oss-process=image/watermark,type_ZHJvaWRzYW5zZmFsbGJhY2s,shadow_50,text_Q1NETiBA5q2i5q2l5YmN6KGM,size_20,color_FFFFFF,t_70,g_se,x_16#pic_center)
+
+1. 客户端发送请求 → DispatcherServlet
+2. DispatcherServlet → HandlerMapping 通过 URL 查找能够处理请求的 Handler，将拦截器与 Handler 一起封装返回
+3. DispatcherServlet → HandlerAdapter 执行对应的 Handler
+4. Handler → DispatcherServlet 处理请求，返回逻辑视图(ModelAndView)
+5. DispatcherServlet → ViewResolver 解析并查询出真正的视图
+6. DispatcherServlet → View 将 Model 传给 View 进行渲染
+7. DispatcherServlet → 客户端，将渲染的 View 在响应中返回
+
+### HandlerMapping 与 HandlerAdapter
+
+HandlerMapping 与 HandlerAdapter 都是用于解决由于 Handler 具有很多类型而产生的问题
+
+收到请求后，DispatcherServlet 通过遍历 this.handlerMappings 找到对应的 HandlerMapping，得到用于处理请求的正确类型的 Handler 并封装为 HandlerExecutionChain
+
+得到 HandlerExecutionChain 后，DispatcherServlet 需要通过遍历 this.handlerAdapters 找到对应的 HandlerAdapter 来适配 Handler 接口与请求参数
+
+this.handlerMappings 与 this.handlerAdapters 都由 Spirng 容器在初始化过程中读取 DispatcherServlet.properties 配置文件时注入
+
+![](https://img-blog.csdnimg.cn/20191110200420919.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p4ZDE0MzU1MTM3NzU=,size_16,color_FFFFFF,t_70)
+
+#### Handler(Controller) 的定义方式
+
+实现 Controller 接口，重写 handleRequest() 方法用于请求的处理，返回 ModelAndView，Handler 最早期的实现方法
+
+```java
+import org.springframework.web.servlet.mvc.Controller;
+
+@Component("/home")
+public class HomeController implements Controller {
+    
+    // return null 表示不需要对响应进行视图解析
+    // 直接使用 response 向客户端写回数据
+    @OVerride
+    public ModelAndView handleRequest(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        
+        System.out.println("home");
+        response.getWriter().write("home controller from body");
+        return null;
+        
+    }
+}
+```
+
+实现 HttpRequestHandler 接口，用于处理 Http Request，类似简单的 Servlet，只有 handlerRequest() 方法
+
+```java
+import org.springframework.web.HttpRequestHandler;
+
+@Component("login")
+public class LoginController implements HttpRequestHandler {
+    @Override
+    public void handleRequest(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        System.out.println("login");
+        response.getWriter().write("login");
+    }
+}
+
+// 对比 Servlet
+@WebServlet("/myServlet")
+public class MyServlet extends HttpServlet {
+    
+    @Override
+    protected void service(HttpServletRequest req, HttpServlet resp) throws ServletException, IOException {
+        super.service(req, resp);
+    }
+    
+}
+```
+
+常用的定义方式，使用 @RequestMapping 注解：
+
+```java
+@Controller
+public class IndexController {
+    @RequestMapping("/index")
+    @ResponseBody
+    public String sayHello() {
+        System.out.println("hello");
+        return "hello";
+    }
+}
+```
+
+#### HandlerMapping
+
+Spring 容器启动时会扫描 Handler 的实现方式，使用不同的类进行实例化，再将 URL → Handler 的映射关系存入 Map 中：
+
+- Controller/HttpRequestHandler 接口 → BeanNameUrlHandlerMapping
+- @RequestMapping → RequestMappingHandlerMapping
+- 静态资源 → SimpleUrlHandlerMapping
+
+##### 需要 HandlerMapping 实例化 Handler
+
+处理请求时，通过循环 handlerMappings 判断请求由哪个 Handler 处理(查找 HandlerMapping)
+
+```java
+// package org.springframework.web.servlet;
+
+protected HandlerExecutionChain getHandler(HttpServletRequest request) throws Exception {
+    if(this.handlerMappings != null) {
+        for(HandlerMapping mapping : this.handlerMappings) {
+            HandlerExecutionChain handler = mapping.getHandler(request);
+            if(handler != null){
+                return handler;
+            }
+        }
+    }
+    return null;
+}
+```
+
+因为 Handler 有多种形式，处理 request 时需要通过 HandlerExecutionChain 来反射执行 Handler 中的方法，即不同的 Handler 需要 new 不同的 HandlerExecutionChain
+
+HandlerExecutionChain 中只定义了 Object handler 属性，无法确定 Handler 类型，所有需要依赖知道类型的 HandlerMapping 进行 HandlerExecutionChain 的实例化
+
+即：
+
+- Handler 存在多种形式，需要 HandlerExecutionChain 通过反射执行方法
+- HandlerExecutionChain 中的 handler 为 Object 属性，无法确认具体的 Handler 类型
+- Spring 容器启动时会扫描 Handler 实现类型，并记录在 HandlerMapping 中
+- 故需要通过 HandlerMapping 实例化 HandlerExecutionChain 来得到 Handler 类型
+- HandlerMapping → HandlerExecutionChain → Handler
+
+#### HandlerAdapter
+
+##### HandlerAdapter 适配 Handler 与 Servlet
+
+Handler 有很多实现形式，但 Servlet 需要处理方法的结构是固定的(以 request 和 response 作为方法入参)，故需要 ==HandlerAdapter 进行适配，模糊掉具体的实现，从而提供统一的接口(handle())给 DispatcherServlet 调用==
+
+上述的 Handler 实现就有 3 种：
+
+- @RequestMapping 注解：使用方法处理请求
+- Controller/HttpRequestHandler  接口：使用接口实现类处理请求
+
+##### 公共接口 vs 适配器
+
+Spring 中采用适配器的方式，而不是通过 Handler 实现公共接口来达到统一访问接口的目的：
+
+- 适配器无需限制 Handler 的底层实现，Handler 可以是任意类型，只需要返回其封装好的 HandlerExecutionChain 即可
+- 集成第三方 Handler 时，只需要新增对应的 HandlerAdapter 即可，无需修改本地代码
+
+### 统一异常处理
+
+使用 @ControllerAdvice + @ExceptionHandler 注解进行统一异常处理，为所有或指定的 Controller 织入异常处理逻辑，当 Controller 中的方法抛出异常时，由被 @ExceptionHandler 注解修饰的方法处理异常
+
+```java
+@ControllerAdvice
+@ResponseBody
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(BaseException.class)
+    public ResponseEntity<?> handleAppException(BaseException ex, HttpServletRequest request) {
+      //......
+    }
+
+    @ExceptionHandler(value = ResourceNotFoundException.class)
+    public ResponseEntity<ErrorReponse> handleResourceNotFoundException(ResourceNotFoundException ex, HttpServletRequest request) {
+      //......
+    }
+}
+```
+
+## Spring 设计模式
+
+### IoC 与 DI
+
+IoC 是一种设计思想，通过借助第三方来实现对象的依赖关系解耦，即程序只需要声明使用对象，而不需要关注对象的创建与管理，从而降低代码的耦合度
+
+Spring IoC 使用类似工厂模式来实现 IoC，只需要配置文件/注解就可以令 IoC 容器负责对象的创建和管理，程序可以直接声明使用，增加项目可维护性与降低开发难度
+
+- 控制：创建与管理对象的权力，对象 A 依赖于 对象 B，当 B 使用 A 时，需要 B 自己去创建 A
+- 反转：程序 → 框架，引入 IoC 容器后，A 的创建交给容器负责，B 只需要从容器中获取 A
+  - A 与 B 之间不再有依赖关系，B 获取 A 的过程由 主动创建 → 被动接收
+
+DI 是 IoC 的一种设计模式，将实例变量注入到一个对象中
+
+### 工厂模式
+
+Spring 使用工厂模式通过 BeanFactory 或 ApplicationContext 创建 bean 对象
+
+#### BeanFactory vs ApplicationContext
+
+- 注入时机：
+  - BeanFactory 使用懒加载，在启动时只创建必要的 bean，只有需要时才会注入，占用内存更少，速度更快
+  - ApplicationContext 在启动时就一次性创建所有 bean
+- 功能：ApplicationContext 扩展了 BeanFactory，新增了额外的功能，适用于开发环境，三种实现获取配置文件以生成 bean
+  - ClassPathXmlApplication：将上下文文件作为类路径资源，从 classPath 路径下找配置文件
+  - FileSystemXmlApplication：从文件系统中的 xml 文件载入上下文定义信息
+  - XmlWebApplication：从 web 系统中的 xml 文件载入上下文定义信息
+
+### 单例模式
+
+Spring 中 bean 的默认作用域为 singleton，即 bean 全局唯一：
+
+- 对于频繁使用的对象(重量级)，可以节省大量创建的开销
+- new 操作的减少也减轻了 GC 的压力，缩短 GC 停顿时间
+
+Spring 通过 ConcurrentHashMap 的单例注册表实现单例模式：
+
+```java
+// 通过 ConcurrentHashMap（线程安全） 实现单例注册表
+private final Map<String, Object> singletonObjects = new ConcurrentHashMap<String, Object>(64);
+
+public Object getSingleton(String beanName, ObjectFactory<?> singletonFactory) {
+        Assert.notNull(beanName, "'beanName' must not be null");
+    	// 需要加锁防止多线程场景创建多个单例
+        synchronized (this.singletonObjects) {
+            // 检查缓存中是否存在实例
+            Object singletonObject = this.singletonObjects.get(beanName);
+            if (singletonObject == null) {
+                //...省略了很多代码
+                try {
+                    singletonObject = singletonFactory.getObject();
+                }
+                //...省略了很多代码
+                // 如果实例对象在不存在，我们注册到单例注册表中。
+                addSingleton(beanName, singletonObject);
+            }
+            return (singletonObject != NULL_OBJECT ? singletonObject : null);
+        }
+    }
+    //将对象添加到单例注册表
+    protected void addSingleton(String beanName, Object singletonObject) {
+            synchronized (this.singletonObjects) {
+                this.singletonObjects.put(beanName, (singletonObject != null ? singletonObject : NULL_OBJECT));
+
+            }
+        }
+}
+```
+
