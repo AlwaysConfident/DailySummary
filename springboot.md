@@ -489,3 +489,229 @@ public Object getSingleton(String beanName, ObjectFactory<?> singletonFactory) {
 }
 ```
 
+### 代理模式
+
+==Spring AOP 基于动态代理实现运行时增强==，当连接点实现接口时，使用 JDK Proxy 实现，否则使用 CGLIB 实现，将与业务逻辑无关，但被业务模块共享的逻辑封装，减少冗余代码，降低模块间耦合度，有利于未来的可扩展性和可维护性
+
+AOP 也可以通过==基于字节码操作的 AspectJ 实现编译时增强==
+
+### 模板方法
+
+模板方法模式是一种行为设计模式，定义操作中的算法骨架，将一些实现步骤延迟到子类中，则子类的具体实现不会影响算法结构，便于算法的扩展和维护
+
+Spring 中 JdbcTemplate、HibernateTemplate 等以 Template 结尾的对数据库操作的类即为模板方法，Spring 使用 Callback + 模板方法，达到代码复用效果，同时增强灵活性
+
+### 观察者模式
+
+观察者模式表示对象之间的依赖关系，当对象 A 发生改变，对象 B 也会做出反应
+
+Spring 事件驱动模型基于观察者模式，用于解耦代码
+
+#### 事件驱动模型
+
+- 事件角色：ApplicationEvent 抽象类充当事件的角色
+  - ContextStartedEvent：ApplicationContext 启动后触发的事件
+  - ContextStoppedEvent：ApplicationContext 停止后触发的事件
+  - ContextRefreshedEvent：ApplicationContext 初始化或刷新后触发的事件
+  - ContextClosedEvent：ApplicationContext 关闭后触发的事件
+- 事件监听者角色：ApplicationListener 接口充当事件监听者角色，定义的唯一的 onApplicationEvent() 方法处理 ApplicationEvent
+- 事件发布者角色：ApplicationEventPublisher 接口充当事件的发布者，publishEvent() 方法通过 ApplicationEventMulticaster 广播事件
+
+#### 事件流程
+
+1. 定义事件：实现继承自 ApplicationEvent 的类
+2. 定义监听者：实现 ApplicationListener 接口，重写 OnApplicationEvent() 方法
+3. 定义发布者：实现 ApplicationEventPublisher 接口，重写 publishEvent() 方法
+
+### 适配器模式
+
+适配器令两个不兼容的接口能够一起工作
+
+#### Spring AOP 中的适配器模式
+
+Spring AOP 的增强通过 AdvisorAdapter 使用到适配器模式
+
+Advice 的常用类型都有对应的拦截器，Spring 预定义的通知需要通过对应的适配器转换为 MethodInterceptor 接口类型的对象，即 Spring AOP 的方法拦截器必须实现 MethodInterceptor，适配器将未实现该接口的拦截器进行转换
+
+如：MethodBeforeAdviceAdapter 通过 getInterceptor 方法将 MethodBeforeAdvice 适配成 MethodBeforeAdviceInterceptor
+
+#### Spring MVC 中的适配器模式
+
+Handler 有多种类型，而 Servlet 只能使用 request 和 response 作为参数，故需要 HandlerAdapter 作为适配器，否则就需要 DispatcherServlet 逐个判断 Handler 类型
+
+### 装饰器模式
+
+装饰器模式通过在原有代码上增加一层包装来进行功能扩展，比直接使用继承更加灵活，如 InputStream 通过包装成 FileInputStream 实现读取文件流
+
+Spring 中通过装饰器模式实现在少修改原有代码下动态地切换不同的数据源，如在类名含有 Wrapper 或 Decorator 的类使用装饰器模式动态地添加额外的职责
+
+## Spring 事务
+
+Spring 事务能否生效取决于数据库引擎是否支持事务
+
+MySQL 中通过 undo log 进行回滚来实现事务的原子性，所有事务进行的修改都会先记录到 undo log 中，若执行过程遇到异常，则直接利用 undo log 中的信息回滚到修改前，且 undo log 会持久化到磁盘保证不会被数据库崩溃影响
+
+Spring 支持编程式与声明式两种事务管理方式
+
+### 编程式事务管理
+
+在代码中硬编码,通过 TransactionTemplate 或 TransactionManager 手动管理事务，事务范围过大时会出现事务未提交导致超时，因此事务比锁的粒度更小，适用于分布式系统
+
+TransactionTemplate：
+
+```java
+@Autowired
+private TransactionTemplate transactionTemplate;
+public void testTransaction() {
+
+        transactionTemplate.execute(new TransactionCallbackWithoutResult() {
+            @Override
+            protected void doInTransactionWithoutResult(TransactionStatus transactionStatus) {
+
+                try {
+
+                    // ....  业务代码
+                } catch (Exception e){
+                    //回滚
+                    transactionStatus.setRollbackOnly();
+                }
+
+            }
+        });
+}
+```
+
+TransactionManager：
+
+```java
+@Autowired
+private PlatformTransactionManager transactionManager;
+
+public void testTransaction() {
+
+  TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+          try {
+               // ....  业务代码
+              transactionManager.commit(status);
+          } catch (Exception e) {
+              transactionManager.rollback(status);
+          }
+}
+```
+
+### 声明式事务管理
+
+代码侵入性小，通过 AOP 实现，在 XML 配置文件中配置或直接基于注解，适用于单体应用或简单业务系统
+
+```java
+@Transactional(propagation = Propagation.REQUIRED)
+public void f {
+    // do someting
+    // ...
+}
+```
+
+### Spring 事务管理接口
+
+- PlatformTransactionManager：平台事务管理器，事务策略的核心
+- TransactionDefinition：事务定义信息(隔离级别、传播行为、超时、只读、回滚规则)
+- TransactionStatus：事务运行状态
+
+#### 事务管理器
+
+Spring 不直接管理事务，而是提供各种事务管理器
+
+通过 PlatformTransactionManager 为各个平台提供对应的事务管理器，由平台进行具体的实现：
+
+- JDBC → DataSourceTransactionManager
+- Hibernate → HibernateTransactionManger
+- JPA → JpaTransactionManager
+
+#### 事务属性
+
+事务管理器接口通过 getTransaction(TransactionDefinition definition) 方法获取事务，其中需要事务属性的定义类
+
+事务属性包含 5 个方面：
+
+- 隔离级别
+  - ISOLATION_DEFAULT：使用数据库默认的隔离级别
+  - ISOLATION_READ_UNCOMMITTED：可读未提交，导致脏读、幻读、不可重读
+  - ISOLATION_READ_COMMITTED：可读已提交，解决脏读，导致幻读、不可重读
+  - ISOLATION_REPEATABLE_READ：可重读，解决脏读、不可重读，导致幻读
+  - ISOLATION_SERIALIZABLE：将事务排序后串行处理，解决脏读、幻读、不可重读
+- 超时：允许事务执行的最长时间，超时后自动回滚
+- 回滚规则：定义导致回滚的异常
+- 传播行为：解决业务层方法间互相调用的事务问题，当事务方法被另一个事务方法调用时，必须指定事务如何传播，如方法 A (外部方法)调用 方法 B(内部方法)，若 B 发生异常需要回滚，需要配置传播行为令 A 也回滚
+  - PROPAGATION_REQUIRED：默认的传播行为，若当前存在事务，则加入，若当前不存在事务，则创建一个新事务
+    - 存在被 PROPAGATION_REQUIRED 修饰的事务，则所有被 PROPAGATION_REQUIRED 修饰的内部与外部方法都属于同一事务，只要一个方法回滚，整个事务都要回滚
+    - 外部方法未开启事务，则 PROPAGATION_REQUIRED 修饰的内部方法会开启自身的事务，且开启的事务相互独立
+  - PROPAGATION_REQUIRES_NEW：物理外部方法是否开启事务，内部方法都开启自己独立的事务，即外部方法的回滚不会导致内部方法的回滚，但内部方法抛出满足回滚规则的异常时，外部方法也会回滚
+  - PROPAGATION_NESTED：当前存在事务，则在嵌套事务内执行，当前没有事务，则同 PROPAGATION_REQUIRED，内部方法回滚不会导致外部方法回滚，外部方法回滚会导致内部方法回滚
+    - 外部方法开启事务，内部方法开启新事务，作为嵌套事务
+    - 外部方法无事务，内部方法单独开启一个事务
+  - PROPAGATION_MANDATORY：加入当前存在的事务，若当前无事务则抛出异常
+- 只读：事务只进行读操作，数据库会提供相应的优化手段
+  - 在进行聚合操作时(统计查询、报表查询)，需要保证读取的数据不被修改，故需要事务支持
+
+#### 事务状态
+
+TransactionStatus 接口记录事务的状态，用于获取、判断事务的相应状态信息
+
+```java
+public interface TransactionStatus{
+    boolean isNewTransaction(); // 是否是新的事务
+    boolean hasSavepoint(); // 是否有恢复点
+    void setRollbackOnly();  // 设置为只回滚
+    boolean isRollbackOnly(); // 是否为只回滚
+    boolean isCompleted; // 是否已完成
+}
+```
+
+### @Transactional
+
+声明式事务管理时需要使用 @Transactional 进行侵入性更小的事务管理
+
+#### 作用域
+
+- 方法：@Transactional 只能应用到 public 方法中，基于 Spring AOP 实现，故动态代理要求方法为 public 才能生成代理类
+- 类：@Transactional 注解类表示类中的所有 public 方法都生效
+- 接口
+
+#### 配置参数
+
+- 传播行为
+- 隔离级别
+- 回滚规则
+- 超时
+- 只读
+
+#### 原理
+
+@Transactional 基于 Spring AOP 实现，类/方法被标注时，Spring 容器会在启动时为其创建代理类，在调用方法时，实际调用的时 TransactionInterceptor 类中的 invoke 方法，该方法负责在目标方法执行前开启事务，执行过程中遇到异常则回滚，执行完毕后提交事务
+
+![](https://img-blog.csdnimg.cn/2021101110475171.png?x-oss-process=image/watermark,type_ZHJvaWRzYW5zZmFsbGJhY2s,shadow_50,text_Q1NETiBAZmFzdGpzb25f,size_20,color_FFFFFF,t_70,g_se,x_16)
+
+#### 自调用问题
+
+被 @Transactional 修饰的方法只会在被其他类调用时开启事务，同一个类方法的调用则不会生效
+
+Spring AOP 生成的代理对象在被同一个类的方法调用时无法拦截该内部调用，也无法开启事务，因为在内部调用时，调用方会直接调用自身的方法，而不会调用代理对象的方法，若要在 Spring AOP 中使用内部调用，则需要在方法内部获取代理对象，在内部方法中调用代理对象的方法
+
+```java
+@Service
+public class MyService {
+
+private void method1() {
+     ((MyService)AopContext.currentProxy()).method2(); // 先获取该类的代理对象，然后通过代理对象调用method2。
+     //......
+}
+@Transactional
+ public void method2() {
+     //......
+  }
+}
+```
+
+故需要自调用的场景应使用 AspectJ 进行事务管理，AspectJ 会通过当前类的代理对象调用内部方法，即相当于外部调用，由此令事务注解生效
+
+## Spring Data JPA
