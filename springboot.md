@@ -715,3 +715,114 @@ private void method1() {
 故需要自调用的场景应使用 AspectJ 进行事务管理，AspectJ 会通过当前类的代理对象调用内部方法，即相当于外部调用，由此令事务注解生效
 
 ## Spring Data JPA
+
+JPA 用于将对象数据持久化到数据库，以及从数据库中查询和恢复对象数据
+
+### 审计功能
+
+JPA 的审计功能用于记录数据库操作的具体行为，如某条记录的创建者、创建时间、修改者、修改时间
+
+在字段上添加注解开启审计功能：
+
+- @CreatedDate：表示该字段为创建时间字段，实体被 insert 时会设置值
+- @CreatedBy：表示该字段为创建人字段，实体被 insert 时会设置值
+- @LastModifiedDate
+- @LastModifiedBy
+
+### 实体间的关联注解
+
+- @OneToOne
+- @ManyToMany
+- @OneToMany
+- @ManyToOne
+
+## Spring Security
+
+Spring Security 基于 Spring 框架，提供了一套 Web 应用安全性的完整解决方案
+
+### 控制请求访问权限的方法
+
+- permitAll：允许所有访问，不做限制
+- anonymous：允许匿名访问
+- denyAll：无条件拒绝任何访问
+- authenticated：只允许已认证的访问
+- fullyAuthenticated：只允许已登录或通过 remember-me 登录的用户访问
+- hasRole：只允许指定角色访问
+- hasAnyRole：允许指定的任意角色访问，直需满足其中一个
+- hasAuthority：只允许具有指定权限的角色访问
+- hasAnyAuthority：允许拥有任意指定的角色访问，直需满足其中一个
+- hasIpAddress：只允许指定 ip 访问
+
+### hasRole vs hasAuthority
+
+- 源码：hasRole 会自动给传入的字符串加上 ROLE_ 前缀，即数据库中的权限字符串需要加上 ROLE_ 前缀；hasAuthority 传入字符串与数据库一致即可
+  - hasRole 与 hasAuthority 底层都调用 hasAnyAuthorityName
+- 设计理念：用户 → 角色 → 权限，通过角色作为权限的集合可以方便地为用户分配一组权限，而不需要逐个分配
+
+### 密码加密
+
+Spring Security 提供多种开箱即用的加密算法，都继承自 PasswordEncoder：
+
+```java
+public interface PasswordEncoder {
+    // 加密
+    String encode(CharSequence var1);
+    // 对比加密后的密码与原始密码
+    boolean matches(CharSequence var1, String var2);
+    // 判断加密密码是否需要再次加密
+    default boolean upgradeEncoding(String encodedPassword) {
+        return false;
+    }
+}
+```
+
+通过 DelegatingPasswordEncoder 兼容多种不同的密码加密算法，以代理类的方式适应不同的业务需求
+
+## Spring Boot
+
+Spring Boot 以约定优于配置的概念简化了 Spring 框架的配置
+
+### Spring 框架的缺点
+
+Spring 是重量级企业开发框架 EJB 的替代品，==通过 DI 和 AOP 用简单的 POJO 对象实现 EJB 的功能==
+
+Spring 的组件代码是轻量级的，但它的==配置是重量级的(大量 XML 配置)==，需要将每个 bean 写入 xml 配置文件
+
+Spring 2.5 引入了基于注解的组件扫描(@Autowired、@Resource)，消除了大量针对应用程序自身组件的显示 XML 配置，通过在相关类、方法、字段声明上使用注解，将 bean 配置移动到组件类本身，而非使用 xml 描述 bean 连接
+
+Spring 3.0 引入基于 Java 的配置，是代替 XML 的类型安全的可重构配置方式(使用 @Bean 注入)
+
+开启 Spring 特性时(事务管理、Spring MVC)还是需要手动进行显示配置(xml、注解)，使用第三方库时也需要在 web.xml 或 Servlet 初始化代码中等显示配置(DispatcherServlet)，且还要处理相关库的依赖和冲突
+
+### Spring Boot 简化 Spring 开发
+
+Spring 简化 EJB，Spring Boot 则是简化 Spring：
+
+- 简化 Spring 应用开发，不再需要编写大量样板代码、xml 配置和注释，提高生产效率
+- Spring 引导类令应用程序可以轻易地与 Spring 生态系统集成，如 Spring JDBC、Spring ORM、Spring Data、Spring Security 等
+- Spring Boot 能够基于默认设置(可修改)快速地构建项目，即约定优于配置
+- Spring Boot 内嵌 Http 服务器，即起步依赖中就包含 Tomcat 的 jar 包，不需要手动管理 Tomcat，可以像使用 Java 应用程序一样轻松地开发、运行、测试 web 应用程序，即不需要部署到 web 服务器也可以像 web 一样访问
+- Spring Boot 提供 CLI 工具用于开发和测试 Spring Boot 应用程序
+- Spring Boot 提供多种插件，可以通过内置工具(Maven、Gradle)开发和测试
+
+### Spring Boot Starters
+
+==Spring Boot Starters 是一系列依赖关系的集合==，用于简化依赖关系的管理
+
+如开发 Web 应用时，需要手动添加 Spring MVC、Tomcat、Jackson 等依赖，而使用 spring-boot-starter-web 一个依赖就能包含开发 REST 服务需要的所有依赖
+
+### 内嵌 Servlet 容器
+
+Spring Boot 内嵌了 Tomcat、Jetty、Undertow 等，令应用程序无需部署到 web 服务器上也能像 web 一样访问
+
+Tomcat 作为默认的嵌入式 servlet 容器，可以通过修改配置文件，移除 Tomcat 依赖并加入其他容器的依赖
+
+### @SpringBootApplication
+
+可以看作 @SpringBootApplication = @Configuration + @EnableAutoConfiguration + @ComponentScan：
+
+- @Configuration：允许在上下文中注册额外的 bean (@Bean)或导入其他配置类
+- @EnableAutoConfiguration：启动 SpringBoot 自动配置机制
+- @ComponentScan：扫描被 @Component 注解的 bean，注解默认会扫描该类所在的包下的所有类
+
+### Spring Boot 自动配置
