@@ -950,6 +950,141 @@ Spring Boot 通过 @EnableAutoConfiguration 开启自动装配，通过 SpringFa
 
 #### SpringApplication 构造器
 
+```java
+public SpringApplication(ResourceLoader resourceLoader, Class<?>... primarySources) {
+    this.resourceLoader = resourceLoader;
+    Assert.notNull(primarySources, "PrimarySources must not be null");
+    this.primarySources = new LinkedHashSet<>(Arrays.asList(primarySources));
+    // 判断当前程序类型
+    this.webApplicationType = WebApplicationType.deduceFromClasspath();
+    // 使用 SpringFactoriesLoader 实例化所有可用的初始器
+    setInitializers((Collection) getSpringFactoriesInstances(ApplicationContextInitializer.class));
+    // 使用 SpringFactoriesLoader 实例化所有可用的监听器
+    setListeners((Collection) getSpringFactoriesInstances(ApplicationListener.class));
+    // 配置应用主方法所在类
+    this.mainApplicationClass = deduceMainApplicationClass();
+}
+```
+
+- 判断当前程序类型：通过 classpath 中是否存在特征类(ConfigurableWebApplicationContext)决定是否应该创建一个为 Web 应用使用的 ApplicationContext 类型(NONE/SERVLET/REACTIVE)
+
+#### 启动方法 run()
+
+初始化后由 run 方法完成 Spring 的整个启动过程：
+
+- 准备 Environment
+- 发布事件
+- 创建上下文、bean
+- 刷新上下文
+- 结束
+
+```java
+public ConfigurableApplicationContext run(String... args) {
+    // 开启时钟计时
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start();
+    // Spring 上下文，注入与管理 bean 且提供多种高级功能
+    ConfigurableApplicationContext context = null;
+    // 启动异常报告容器
+    Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
+    // 开启设置，让系统模拟不存在 IO 设备
+    configureHeadlessProperty();
+    // 初始化 SpringApplicationRUnListener 监听器，并进行封装
+    SpringApplicationRunListeners listeners = getRunListeners(args);
+    listeners.starting();
+    try {
+        ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
+        // 准备 Environment
+        ConfigurableEnvironment environment = prepareEnvironment(listeners, applicationArguments);
+        configureIgnoreBeanInfo(environment);
+        Banner printedBanner = printBanner(environment);
+        // 实例化上下文
+        context = createApplicationContext();
+        // 异常播报器
+        exceptionReporters = getSpringFactoriesInstances(SpringBootExceptionReporter.class, new Class[] {ConfigurableApplication.class}, context);
+        // 初始化容器
+        prepareContext(context, environment, listeners, applicationArguments, printedBanner);
+        // 刷新上下文
+        refreshContext(context);
+        // 给实现类的 hook
+        afterRefresh(context, applicationArguments);
+        stopWatch.stop();
+        if(this.logStartupInfo) {
+            new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), stopWatch);
+        }
+        listeners.started(context);
+        callRunners(context, applicationArguments);
+    }
+    catch (Throwable ex) {
+        handleRunFailure(context, ex, exceptionReporters, listeners);
+        throw new IllegalStateException(ex);
+    }
+    try {
+        lsiteners.running(context);
+    }
+    catch(Throwable ex) {
+        handleRunFailure(context, ex, exceptionReporters, null);
+        throw new IllegalStateException(ex);
+    }
+    return context;
+}
+```
+
+- SpringApplicationRunListener：作为 Spring Boot 的监听器，在整个启动流程接收不同执行点事件通知，并广播相应的事件，用户可以通过监听器接口回调在启动的各个流程加入自定义逻辑
+  - starting：run 方法开始执行前
+  - environmentPrepared：在 environment 准备完成后，context 创建前
+  - contextPrepared：在 context 构建完成时
+  - contextLoaded：在 context 构建完成，还未刷新时
+  - started：在 context 刷新且启动后
+  - running：在 run 方法执行完成前
+  - failed：应用运行出现错误时
+
+```java
+public interface SpringApplicationRunListener {
+  /**EventPublishingRunListener 前期采用 SimpleApplicationEventMulticaster.multicastEvent(ApplicationEvent) 进行广播
+  **/
+   default void starting() {} 
+   default void environmentPrepared(ConfigurableEnvironment environment) {}
+   default void contextPrepared(ConfigurableApplicationContext context) {}
+   default void contextLoaded(ConfigurableApplicationContext context) {}
+  /**
+  EventPublishingRunListener 后期采用 context.publishEvent(ApplicationEvent)
+  **/
+   default void started(ConfigurableApplicationContext context) {}
+   default void running(ConfigurableApplicationContext context) {}
+   default void failed(ConfigurableApplicationContext context, Throwable exception) {}
+}
+
+```
+
+- prepareEnvironment：运行时使用的 ==Environment 只读接口==是对运行程序的抽象，保存系统配置的中心，启动时使用的是==可编辑的 ConfigurableEnvironment 接口==，提供合并父环境、添加 active profile(切换 dev/prd)以及设置解析配置文件方式的接口
+  - MutablePropertySources getPropertySources()：返回可编辑的 PropertySources，用于在启动阶段自定义环境的 PropertySources
+
+```java
+private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners listeners,
+      ApplicationArguments applicationArguments) {
+   // Create and configure the environment
+  //根据不同环境不同的Enviroment （StandardServletEnvironment，StandardReactiveWebEnvironment，StandardEnvironment）
+   ConfigurableEnvironment environment = getOrCreateEnvironment();
+  //填充启动类参数到enviroment 对象
+   configureEnvironment(environment, applicationArguments.getSourceArgs());
+  //更新参数
+  ConfigurationPropertySources.attach(environment);
+  //发布事件 
+  listeners.environmentPrepared(environment);
+  //绑定主类 
+  bindToSpringApplication(environment);
+   if (!this.isCustomEnvironment) {//转换environment的类型，但这里应该类型和deduce的相同不用转换
+      environment = new EnvironmentConverter(getClassLoader()).convertEnvironmentIfNecessary(environment,
+            deduceEnvironmentClass());
+   }
+  //将现有参数有封装成proertySources
+   ConfigurationPropertySources.attach(environment);
+   return environment;
+}
+
+```
+
 
 
 ### 常用注解
