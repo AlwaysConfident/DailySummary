@@ -826,3 +826,244 @@ Tomcat 作为默认的嵌入式 servlet 容器，可以通过修改配置文件�
 - @ComponentScan：扫描被 @Component 注解的 bean，注解默认会扫描该类所在的包下的所有类
 
 ### Spring Boot 自动配置
+
+==Spring Boot 基于 SPI 优化了 Spring 本身的自动装配==(@Autowired)，定义了一套接口规范：==Spring Boot 启动时会扫描外部引用 jar 包中的 META-INF/spring.factories 文件==，将文件中配置的信息加载到 Spring 容器，并执行类中定义的操作，外部的 jar 包只需要按照 Spring Boot 定义的标准即可
+
+@EnableAutoConfiguration 是启动自动配置的关键
+
+1. @EnableAutoConfiguration → 开启自动装配
+   - @EnableAutoConfiguration 通过 Spring 的 @Import 注解导入 AutoConfigurationImportSelector 类
+   - @Import 可以导入配置类或 bean 到当前类
+2. AutoConfigurationImportSelector 通过 getCandidateConfiguration 方法将所有自动配置类信息以 List 形式返回，配置信息由 Spring 容器视为 bean 管理 
+   - AutoConfigurationImportSelector ——实现接口→ ImportSelector ——实现方法→ selectImports ——调用方法→ getAutoConfigurationEntry 获取所有符合条件(加载到 IoC 容器)的类的全限定类名
+   - ![](https://oss.javaguide.cn/github/javaguide/system-design/framework/spring/3c1200712655443ca4b38500d615bb70~tplv-k3u1fbpfcp-watermark.png)
+3. getAutoConfigurationEntry()：
+
+```java
+private static final AutoConfigurationEntry EMPTY_ENTRY = new AutoConfigurationEntry();
+
+AutoConfigurationEntry getAutoConfigurationEntry(AutoConfigurationMetadata autoConfigurationMetadata, AnnotationMetadata annotationMetadata) {
+    // 检测是否开启自动装配
+    if(!this.isEnabled(annotationMetadata)){
+        return EMPTY_ENTRY;
+    } else {
+        // 获取 EncableAutoConfiguration 注解中的 exclude 和 excludeName
+        AnnotationAttributes attributes = this.getAttributes(annotationMetadata);
+        // 获取需要自动装配的所有配置类
+        List<String> configurations = this.getCandidateConfigurations(annotationMetadata, attributes);
+        // 筛选出符合条件的配置信息
+        configurations = this.removeDuplicates(configurations);
+        Set<String> exclusions = this.getExclusions(annotationMetadata, attributes);
+        this.checkExcludedClasses(configurations, exclusions);
+        configurations.removeAll(exclusions);
+        configurations = this.filter(configurations, autoConfigurationMetadata);
+        this.fireAutoConfigurationImportEvents(configurations, exclusions);
+        return new AutoConfigurationImportSelector.AutoConfigurationEntry(configurations, exclusions);
+    }
+}
+```
+
+1. 检测是否开启自动装配
+
+   ![](https://oss.javaguide.cn/p3-juejin/77aa6a3727ea4392870f5cccd09844ab~tplv-k3u1fbpfcp-watermark.png)
+
+2. 获取 EnableAutoConfiguration 注解中的 exclude 和 excludeName
+
+   ![](https://oss.javaguide.cn/p3-juejin/3d6ec93bbda1453aa08c52b49516c05a~tplv-k3u1fbpfcp-zoom-1.png)
+
+3. 获取所有自动装配的配置类，读取 META-INF/spring.factories
+
+   ```xml
+   spring-boot/spring-boot-project/spring-boot-autoconfigure/src/main/resources/META-INF/spring.factories
+   ```
+
+   ![](https://oss.javaguide.cn/github/javaguide/system-design/framework/spring/58c51920efea4757aa1ec29c6d5f9e36~tplv-k3u1fbpfcp-watermark.png)
+
+   XXXAutoConfiguration 的作用就是按需加载组件
+
+   ![](https://oss.javaguide.cn/github/javaguide/system-design/framework/spring/94d6e1a060ac41db97043e1758789026~tplv-k3u1fbpfcp-watermark.png)
+
+   所有 Spring Boot Starter 下的 META-INF/spring.factories 都会被读取
+
+   故自定义的 starter 必须在 META-INF/spring.factories 中注册
+
+   ![](https://oss.javaguide.cn/github/javaguide/system-design/framework/spring/68fa66aeee474b0385f94d23bcfe1745~tplv-k3u1fbpfcp-watermark.png)
+
+4. 通过 @ConditionalOnXXX 过滤掉不需要加载的配置类，只有完全满足注解中条件的配置类才会被加载，加快启动速度
+
+   - @ConditionalOnBean：容器内由指定的 bean
+   - @ConditionalOnClass：当类路径下有指定类
+
+Spring Boot 通过 @EnableAutoConfiguration 开启自动装配，通过 SpringFactoriesLoader 最终加载 META-INF/spring.factories 中的自动配置类实现自动装配，自动配置类通过 @ConditionalOnXXX 进行筛选按需加载，引入 spring-boot-starter-xxx 包实现起步依赖
+
+#### 总结
+
+自动装配即将第三方的 bean 对象自动装配到 Spring 容器中，而不需要手工在配置文件中写入
+
+实现自动装配的第三方组件只需要在启动类中使用 @SpringBootApplication 注解，利用 @EnableAutoConfiguration 的三个核心功能：
+
+- @Configuration：表示启动类为配置类，且能够引入第三方的配置类与 bean 对象，组件中也必须要有 @Configuration 配置类
+- 约定第三方组件的配置文件位于其包中的 META-INF/spring.factories 文件中，通过扫描文件获取配置类在第三方 jar 包中的位置
+- Spring Boot 获取所有第三方配置类后，通过 Spring 的 @Import 注解(引入 AutoConfiguartionImportSelector 类)实现对配置类的动态加载，从而完成自动装配
+
+### 加载配置优先级
+
+约定大于配置：在默认情况下，Spring Boot 会查找文件名为 application 的文件
+
+1. 项目根路径的 config 文件夹
+2. 项目根路径
+3. classpath 下的 config 文件夹
+4. classpath
+
+![](https://img-blog.csdnimg.cn/20210123234010792.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0NoYWt5cmQ=,size_16,color_FFFFFF,t_70)
+
+优先级高的配置会覆盖优先级低的
+
+当存在同级配置文件时：.properties > .yml > .yaml
+
+#### 特殊配置
+
+- 指定读取的子文件
+
+![](https://img-blog.csdnimg.cn/20210127171439313.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0NoYWt5cmQ=,size_16,color_FFFFFF,t_70)
+
+- 命令行指定读取的配置文件时，只会读取指定的配置文件，不再读取任何其他配置文件
+
+![](https://img-blog.csdnimg.cn/20210129170300609.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0NoYWt5cmQ=,size_16,color_FFFFFF,t_70)
+
+### Spring Boot 启动流程
+
+![](https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/6ba8bf5c8177430b8f462f35948d1c74~tplv-k3u1fbpfcp-zoom-in-crop-mark:1512:0:0:0.awebp?)
+
+1. Java 程序由启动主类调用 main() 开始
+2. 调用 SpringApplication 的构造方法，实例一个 Spring 应用对象，在构造方法完成启动环境初始化工作：推断主类、Spring 应用类型、加载配置文件、读取 spring.factories 文件等
+3. 调用 SpringApplication.run 方法，所有启动工作在该方法中完成：加载配置资源、上下文的准备/创建/刷新、过程时间发布等
+
+#### 启动入口
+
+启动类 = @SpringBootApplication + psvm 方法 + SpringApplication.run(XXXApplication.class, args)
+
+- @SpringBootApplication：
+  - @Configuration：标记启动类为 IoC 容器的配置类，同时也能够引入第三方的配置类与 bean 对象
+  - @EnableAutoConfiguration：自动装配的核心，通过 Spring 的 ==@Import== 注解引入 ==AutoConfigurationImportSelector== 类，扫描约定的第三方配置文件路径(==jar 包的 META-INF/spring.factories==)以获取第三方配置类(==getAutoConfigurationEntry==)，筛选(==@ConditionalOnXXX==)并加载(==SpringFactoryLoader==)需要的配置类
+  - @ComponentScan：指定扫描 bean 对象的路径，默认为启动类所在包下的所有类，将 Spring 项目自身的 bean 对象加载至 IoC 容器
+
+#### SpringApplication 构造器
+
+
+
+### 常用注解
+
+- 自动装配：
+
+  - SpringBootAppliaction：@Configuration + @EnableAutoConfiguration + @ComponentScan，自动装配的基础
+  - @Configuration：允许引入其他配置类或 bean
+  - @EnableAutoConfiguration：启用自动装配
+  - @ComponentScan：扫描 @Component 的 bean，默认扫描该注解所在包下的所有类
+
+- Spring Bean：
+
+  - @Autowired：自动注入对象(@Service → @Controller)，被注入的类同样要被 Spring 容器管理，默认 byType，失效时 byName
+  - @Component：通用的类注解，可标注任意类为 Spring 组件
+
+  - @Repository：对应持久层(DAO)，主要用于数据库相关操作，会将数据库返回的异常转换为 Java 的异常抛出
+  - @Service：对应服务层，只起标注作用
+  - @Controller：对应控制层，用于接收用户请求并返回，负责请求的路由、转发、处理、响应
+  - @RestController：@Controller + @ResponseBody，表示类为控制器 bean，且是==将函数的返回值直接填入 HTTP Response Body 中==，是 REST 风格的控制器
+    - 使用 @Controller 时，需要返回一个 View，用于前后端一体的传统 Spring MVC 架构
+  - @Scpoe：声明 bean 的作用域
+    - singleton
+    - prototype
+    - session
+    - application
+    - request
+  - @Configuration：标识配置类，只有在 @Configuration 标注下的 @Bean 才为单例模式
+
+- HTTP 请求：
+
+  - @RequestParam：获取查询参数
+
+  - @Pathvariable：获取路由参数
+
+  - @RequestBody：读取 Request 请求的 body 部分且 Content-Type = application/json，接收到数据后会自动绑定到 Java 对象
+    - 通过 HttpMessageConverter 负责 Json → Java 对象
+    - @RequestBody 唯一，但 @RequestParam 与 @Pathvariable 能有多个
+
+- 读取配置信息：
+
+  - @Value("${}")：读取简单的配置信息
+    - 不能作用于 static/final
+    - 不能在非注册的类中使用，即未被 @Component 等修饰
+    - 被 @Value 修饰后只能通过依赖注入的方式使用，不能通过 new 的方式自动注入
+  - @ConfigurationProperties：读取配置信息并与 bean 绑定
+  - @PropertySource：读取指定 properties 文件，不支持 yml
+
+- 参数校验：
+
+  - @NotEmpty
+  - @NotBlank
+  - @Null/@NotNull
+  - @AssertTrue/@AssertFalse
+  - @Pattern(regex=, flag=)
+  - @Email
+  - @Min(value)/@Max(value)/@DecimalMax(value)/@DecimalMin(value)
+  - @Size(max=, min=)
+  - @Digits(integer, fraction)
+  - @Past/@Future
+  - @Valid：在需要验证的参数上添加，验证失败则抛出错误
+  - @Validated：在类上添加，告知 Spring 校验方法参数
+    - 校验 Service 层时需要，Controller 层时不需要
+
+- 异常处理：
+
+  - @ControllerAdvice：注解定义全局异常处理类
+  - @ExceptionHandler(Exception.class)：注解声明异常处理方法
+
+- JPA：
+
+  - @Entity：声明类对应数据库实体
+  - @Table：设置表名
+  - @Id：声明主键
+    - @GeneratedValue 指定主键生成策略：
+      - TABLE：使用指定的表保存主键
+      - SEQUENCE：在不支持主键自增的数据库中，使用序列机制生成主键
+      - IDENTITY：自增
+      - AUTO：由数据库引擎决定
+  - @Column：声明字段
+  - @Transient：声明不需要持久化的字段
+  - @Lob：声明大字段
+  - @Enumeration：声明枚举类型字段
+  - @EnableJpaAuditing：开启审计功能，需要继承 AbstractAuditBase
+  - @Modifying：配合 @Transactional，标识该操作为修改操作
+  - @OneToOne/@OneToMore/@MoreToMore/@MoreToOne
+
+- 事务：
+
+  - @Transactional
+    - 作用于类时，会作用于类中所有 public 方法
+    - 作用于方法时，会覆盖类的 @Transactional
+
+- Json：
+
+  - @JsonIgnoreProperties：作用于类，过滤不返回/不解析的字段
+  - @JsonIgnore：作用于字段
+  - @JsonFormat：格式化 Json，扁平化对象
+
+- 测试：
+
+  - @ActiveProfiles：作用于测试类，声明生效的 Spring 配置文件
+  - @Test：声明测试方法
+  - @Transactional：回滚测试数据
+  - @WithMockUser：Spring Security 中用于模拟真实用户，能够赋予权限
+
+- 定时任务：
+
+  - @Scheduled
+  - @EnableScheduled：在启动类标注后，Spring Boot 会发现 @Scheduled 并在后台执行任务
+
+### Spring Boot 监控运行状态
+
+使用 Spring Boot Actuator 对 Spring Boot 进行简单的监控，集成模块后能够使用开箱即用的 API 获取程序运行时的内部状态信息
+
+如：通过 GET 方法访问 /health 接口获取应用程序的健康指标
+
