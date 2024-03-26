@@ -933,7 +933,7 @@ Spring Boot 通过 @EnableAutoConfiguration 开启自动装配，通过 SpringFa
 
 ### Spring Boot 启动流程
 
-![](https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/6ba8bf5c8177430b8f462f35948d1c74~tplv-k3u1fbpfcp-zoom-in-crop-mark:1512:0:0:0.awebp?)
+![](https://mmbiz.qpic.cn/mmbiz_png/uJDAUKrGC7L1vFQMnaRIJSmeZ58T2eZicjafiawQLp9u8wc4ic1Mjy6OyfibzfjVofeL5pnS1NSFKVjlIg6neI9ySg/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1&wx_co=1)
 
 1. Java 程序由启动主类调用 main() 开始
 2. 调用 SpringApplication 的构造方法，实例一个 Spring 应用对象，在构造方法完成启动环境初始化工作：推断主类、Spring 应用类型、加载配置文件、读取 spring.factories 文件等
@@ -957,6 +957,8 @@ public SpringApplication(ResourceLoader resourceLoader, Class<?>... primarySourc
     this.primarySources = new LinkedHashSet<>(Arrays.asList(primarySources));
     // 判断当前程序类型
     this.webApplicationType = WebApplicationType.deduceFromClasspath();
+    // SpringFactoriesLoader 是框架内通用的工厂实例加载器
+    // 从 spring.factories 中加载和实例化工厂
     // 使用 SpringFactoriesLoader 实例化所有可用的初始器
     setInitializers((Collection) getSpringFactoriesInstances(ApplicationContextInitializer.class));
     // 使用 SpringFactoriesLoader 实例化所有可用的监听器
@@ -966,17 +968,22 @@ public SpringApplication(ResourceLoader resourceLoader, Class<?>... primarySourc
 }
 ```
 
-- 判断当前程序类型：通过 classpath 中是否存在特征类(ConfigurableWebApplicationContext)决定是否应该创建一个为 Web 应用使用的 ApplicationContext 类型(NONE/SERVLET/REACTIVE)
+- SpringApplication 的实例化：
+  - ==判断当前程序类型(是否为 web 项目)==：通过 classpath 中是否存在特征类(ConfigurableWebApplicationContext)决定是否应该创建一个为 Web 应用使用的 ApplicationContext 类型(NONE/SERVLET/REACTIVE)
+  - ==实例化所有可用的初始器==
+  - ==实例化所有可用的监听器==
+  - ==配置 main 方法运行的主类==
 
 #### 启动方法 run()
 
 初始化后由 run 方法完成 Spring 的整个启动过程：
 
 - 准备 Environment
-- 发布事件
 - 创建上下文、bean
 - 刷新上下文
 - 结束
+
+在整个生命周期穿插了很多监听器的动作
 
 ```java
 public ConfigurableApplicationContext run(String... args) {
@@ -987,7 +994,7 @@ public ConfigurableApplicationContext run(String... args) {
     ConfigurableApplicationContext context = null;
     // 启动异常报告容器
     Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
-    // 开启设置，让系统模拟不存在 IO 设备
+    // 开启 headless 设置，让系统模拟不存在 IO 设备
     configureHeadlessProperty();
     // 初始化 SpringApplicationRUnListener 监听器，并进行封装
     SpringApplicationRunListeners listeners = getRunListeners(args);
@@ -1039,53 +1046,62 @@ public ConfigurableApplicationContext run(String... args) {
   - running：在 run 方法执行完成前
   - failed：应用运行出现错误时
 
-```java
-public interface SpringApplicationRunListener {
-  /**EventPublishingRunListener 前期采用 SimpleApplicationEventMulticaster.multicastEvent(ApplicationEvent) 进行广播
-  **/
-   default void starting() {} 
-   default void environmentPrepared(ConfigurableEnvironment environment) {}
-   default void contextPrepared(ConfigurableApplicationContext context) {}
-   default void contextLoaded(ConfigurableApplicationContext context) {}
-  /**
-  EventPublishingRunListener 后期采用 context.publishEvent(ApplicationEvent)
-  **/
-   default void started(ConfigurableApplicationContext context) {}
-   default void running(ConfigurableApplicationContext context) {}
-   default void failed(ConfigurableApplicationContext context, Throwable exception) {}
-}
-
-```
-
 - prepareEnvironment：运行时使用的 ==Environment 只读接口==是对运行程序的抽象，保存系统配置的中心，启动时使用的是==可编辑的 ConfigurableEnvironment 接口==，提供合并父环境、添加 active profile(切换 dev/prd)以及设置解析配置文件方式的接口
-  - MutablePropertySources getPropertySources()：返回可编辑的 PropertySources，用于在启动阶段自定义环境的 PropertySources
+  - 创建配置环境
+  - 加载属性资源:
+  - 加载配置文件
 
-```java
-private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners listeners,
-      ApplicationArguments applicationArguments) {
-   // Create and configure the environment
-  //根据不同环境不同的Enviroment （StandardServletEnvironment，StandardReactiveWebEnvironment，StandardEnvironment）
-   ConfigurableEnvironment environment = getOrCreateEnvironment();
-  //填充启动类参数到enviroment 对象
-   configureEnvironment(environment, applicationArguments.getSourceArgs());
-  //更新参数
-  ConfigurationPropertySources.attach(environment);
-  //发布事件 
-  listeners.environmentPrepared(environment);
-  //绑定主类 
-  bindToSpringApplication(environment);
-   if (!this.isCustomEnvironment) {//转换environment的类型，但这里应该类型和deduce的相同不用转换
-      environment = new EnvironmentConverter(getClassLoader()).convertEnvironmentIfNecessary(environment,
-            deduceEnvironmentClass());
-   }
-  //将现有参数有封装成proertySources
-   ConfigurationPropertySources.attach(environment);
-   return environment;
-}
+- 创建 SpringApplicationContext 上下文：根据 Web 容器类型不同创建不同的上下文实例，实现 3 个接口：
+  - Closeable：提供关闭时资源释放的接口
+  - Lifecycle：提供对生命周期控制接口
+  - ApplicationContext：配置上下文的中心接口，继承了其他很多接口，如查询信息的只读接口、构建自动装配 bean 的工厂
 
-```
+![](https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/6cd32cd2d9ed4017a8699491b39d8e80~tplv-k3u1fbpfcp-zoom-in-crop-mark:1512:0:0:0.awebp?)
 
+- 上下文初始化
+- 刷新上下文
+- 通知监视器，执行 runner，结束启动
 
+##### 总结
+
+1. SpringApplication 初始化
+   - 判断项目类型是否为 web 项目
+   - SpringFactoriesLoader 实例化所有初始器
+     - ApplicationContextInitializer：容器刷新前(prepareContext)会调用其实现类的 initialize 方法对容器进行初始化操作
+   - 实例化所有监听器
+   - 配置主方法所在启动类
+     - mainApplicationClass：主要用于监听与日志
+2. run 方法
+   - 启动计时器与监听器：
+     - 计时器只用于记录启动过程所需时间
+     - 监听器用于监听启动流程的生命周期，并在指定时期通过回调函数实现自定义逻辑
+   - 配置环境：
+     - 根据项目类型创建环境：JVM、Servlet 等参数
+     - 加载项目属性与配置文件
+   - 根据项目类型创建上下文(容器)：
+     - createApplicationContext：通过反射创建容器的实现类
+       - 根据 webApplicationType 确定项目类型，使用对应的 ResourceLoader 与 Reader
+       - ResourceLoader：负责读取与加载 classpath 下的资源(bean)
+       - Reader：负责解析 ResourceLoader 加载的资源，不同的资源(xml、groove 文件)有不同的 Reader/Scanner
+   - 刷新前置处理 prepareContext：为容器补充配置信息
+     - 为容器配置 beanFactory 与 resourceLoader
+     - 调用实例化的初始器
+     - 将部分 bean 注册为单例模式(beanNameGenerator)
+     - 设置自定义的 ResourceLoader
+     - 注册自定义的类型转换器 ConversionService
+   - 刷新上下文：负责容器的具体使用
+     - invokeBeanFactoryPostProcessors：执行容器扩展点(BeanFactoryPostProcessor、BeanDefinitionRegistryPostProcessor)，包括 Spring 自身的以及第三方的
+     - onRefresh：启动内嵌的 Web 容器(Tomcat)
+     - finishBeanFactoryInitialization：实例化 bean 单例
+   - 通知监听器，执行 runner，结束启动
+     - 依次调用注册的 Runners
+3. 启动类自动装配
+   - @SpringApplication
+     - @SpringConfiguration
+     - @ComponentScan
+     - @EnableAutoConfiguration
+       - @Import
+         - AutoConfigurationImportSelector
 
 ### 常用注解
 
