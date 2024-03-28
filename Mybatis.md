@@ -405,3 +405,69 @@ SELECT * FROM PERSON WHERE ID = '1 OR ID > 0'
 ### 结果映射
 
 resultMap 极大地简化了 JDBC 的 ResultSets 数据提取代码，且在一些情形下允许进行一些 JDBC 不支持的操作
+
+通过 resultType="" 使用全限定类名将 ResultSets 映射到 bean，MyBatis 通过自动生成的 resultMap 根据属性名映射列到 JavaBean 的属性，而不需要进行显示配置
+
+#### 复杂的结果映射
+
+- `constructor` - 用于在实例化类时，注入结果到构造方法中
+
+  - `idArg` - ID 参数；标记出作为 ID 的结果可以帮助提高整体性能
+
+  - `arg` - 将被注入到构造方法的一个普通结果
+- `id` – 一个 ID 结果；标记出作为 ID 的结果可以帮助提高整体性能
+- `result` – 注入到字段或 JavaBean 属性的普通结果
+- `association` – 一个复杂类型的关联；许多结果将包装成这种类型，表示从属关系
+- 嵌套结果映射 – 关联可以是 `resultMap` 元素，或是对其它结果映射的引用
+- `collection` – 一个复杂类型的集合
+- 嵌套结果映射 – 集合可以是 `resultMap` 元素，或是对其它结果映射的引用
+- `discriminator` – 使用结果值来决定使用哪个 `resultMap`
+  - `case` – 基于某些值的结果映射
+    - 嵌套结果映射 – `case` 也是一个结果映射，因此具有相同的结构和元素；或者引用其它的结果映射
+
+#### id & result
+
+```xml
+<id property="id" column="post_id"/>
+<result property="subject" column="post_subject"/>
+```
+
+id 和 result 元素都将一个列的值映射到一个简单数据类型的属性或字段
+
+两者的唯一不同是，id 元素对应的属性会被标记为对象的标识符，在比较对象实例时使用，可以提交整体性能，尤其是进行缓存和嵌套结果映射时
+
+#### 关联
+
+association 元素处理"有一个"类型的关系，关联结果映射需要告知 MyBatis 如何加载关联：
+
+- 嵌套 Select 查询：通过执行另外一个 SQL 映射语句加载期望的复杂类型
+- 嵌套结果映射：使用嵌套的结果映射处理连接结果的重复子集
+
+##### 嵌套 select 查询
+
+```xml
+<resultMap id="blogResult" type="Blog">
+  <association property="author" column="author_id" javaType="Author" select="selectAuthor"/>
+</resultMap>
+
+<select id="selectBlog" resultMap="blogResult">
+  SELECT * FROM BLOG WHERE ID = #{id}
+</select>
+
+<select id="selectAuthor" resultType="Author">
+  SELECT * FROM AUTHOR WHERE ID = #{id}
+</select>
+```
+
+select = "selectAuthor" 表示应该使用 selectAuthor 语句加载 author 属性，即当 selectBlog 时，会自动通过 selectAuthor 加载嵌套属性
+
+这种方式简单，但会造成 =="N + 1 查询问题"==：
+
+- 1 → 一个查询结果列表
+- N → 为查询结果列表的 N 行都执行 select 语句加载嵌套信息
+
+导致海量的 SQL 语句被执行
+
+MyBatis 对这样的查询进行延迟加载，因此可以将大量语句同时运行的开销分散，但在加载结果列表后立刻遍历列表以获取嵌套数据时会触发所有延迟加载查询，严重影响性能
+
+##### 关联的嵌套结果映射
