@@ -137,4 +137,271 @@ public interface BlogMapper {
 - SqlSessionFactory：用于创建执行 SQL 的 SqlSession，被实例化后应在程序的整个生命周期中存在
   - 作用域：应用作用域，可以通过单例模式确保只有一个 SqlSessionFactory
 - SqlSession：每个线程都有自己的 SqlSession 实例，且 SqlSession 自身是线程不安全的，故 SqlSession 不应被其他线程共享
-  - 作用域：方法/请求作用域，
+  - 作用域：方法/请求作用域，不应将 SqlSession 实例的引用放在类的静态域，甚至一个类的实例变量也不行，也不应将 SqlSession 实例引用放在任何类型的托管作用域中(Servlet 框架中的 HttpSession)
+- mapper：绑定映射语句的接口，mapper 接口实例从 SqlSession 中获取，且不需要被显示关闭
+  - 作用域：方法作用域，理论上应与请求的 SqlSession 相同，但 mapper 在调用方法结束后就可以丢弃，由此避免在作用域中管理过多的 SqlSession 资源
+
+## XML 配置
+
+MyBatis 配置文件会影响 MyBatis 行为的设置和属性信息
+
+### 属性
+
+属性可以在外部进行配置，且可以进行动态替换("${}")
+
+若一个属性在多处进行配置：
+
+- 首先读取在 properties 元素中指定的属性
+- 然后根据 properties 元素中的 resource 属性读取类路径下属性文件，并==覆盖之前读过的同名属性==
+- 最后读取作为方法参数传递的属性，并==覆盖之前读过的同名属性==
+
+即 方法参数 > resource 路径下配置文件 > 默认配置文件
+
+#### 默认属性
+
+从 MyBatis 3.4.2 开始，可以通过开启特性为占位符指定默认值：
+
+```xml
+<properties resource="org/mybatis/example/config.properties">
+  <!-- ... -->
+  <property name="org.apache.ibatis.parsing.PropertyParser.enable-default-value" value="true"/> <!-- 启用默认值特性 -->
+</properties>
+
+<dataSource type="POOLED">
+  <!-- ... -->
+  <property name="username" value="${username:ut_user}"/> <!-- 如果属性 'username' 没有被配置，'username' 属性的值将为 'ut_user' -->
+</dataSource>
+```
+
+当 ":" 字符被占用时，需要替换为其他特殊字符
+
+```xml
+<properties resource="org/mybatis/example/config.properties">
+  <!-- ... -->
+  <property name="org.apache.ibatis.parsing.PropertyParser.default-value-separator" value="?:"/> <!-- 修改默认值的分隔符 -->
+</properties>
+```
+
+### 设置
+
+MyBatis 中极为重要的调整设置，会改变 MyBatis 的运行时行为
+
+- cacheEnabled：全局性地开启或关闭所有映射器配置文件中已配置的任何缓存。
+- lazyLoadingEnabled：延迟加载的全局开关。当开启时，所有关联对象都会延迟加载。 特定关联关系中可通过设置 `fetchType` 属性来覆盖该项的开关状态。
+- useGeneratedKeys：允许 JDBC 支持自动生成主键，需要数据库驱动支持。如果设置为 true，将强制使用自动生成主键。尽管一些数据库驱动不支持此特性，但仍可正常工作（如 Derby）。
+- defaultExecutorType： 配置默认的执行器。SIMPLE 就是普通的执行器；REUSE 执行器会重用预处理语句（PreparedStatement）； BATCH 执行器不仅重用语句还会执行批量更新。
+
+### 类型别名
+
+别名可为 Java 类型设置缩写，只用于减少 XML 配置文件中冗余的全限定类名
+
+```xml
+<typeAliases>
+  <typeAlias alias="Author" type="domain.blog.Author"/>
+  <typeAlias alias="Blog" type="domain.blog.Blog"/>
+  <typeAlias alias="Comment" type="domain.blog.Comment"/>
+  <typeAlias alias="Post" type="domain.blog.Post"/>
+  <typeAlias alias="Section" type="domain.blog.Section"/>
+  <typeAlias alias="Tag" type="domain.blog.Tag"/>
+</typeAliases>
+```
+
+也可以指定一个包名，MyBatis 会在包名下搜索需要的 bean，没有注解时默认使用 bean 的首字母小写类名
+
+```xml
+<typeAliases>
+  <package name="domain.blog"/>
+</typeAliases>
+```
+
+```java
+@Alias("abc")
+public class Author {
+    
+}
+```
+
+### 类型处理器
+
+MyBatis 在设置预处理语句中的参数或从结果集中取出一个值时，会使用类型处理器将获取到的值转换成 Java 类型
+
+可以通过重写或新增类型处理器来处理不支持的或非标准的类型：
+
+- 实现 TypeHandler 接口
+- 继承 BaseTypeHandler 类
+
+使用自定义的类型处理器会覆盖默认的对应类型的处理器
+
+MyBatis 不会通过检测数据库元信息来决定使用哪种处理器，因为 ==MyBatis 只有在语句执行时才清楚数据类型==，所以必须在参数和结果映射中指明字段类型
+
+MyBatis 获取类型处理器的类型：配置文件中 typeHandler 元素的 javaType 属性 > 类型处理器类上的注解 @MappedTypes > 类型处理器的泛型
+
+#### 枚举类型
+
+映射枚举类型需要使用 EnumTypeHandler(默认) 或 EnumOrdinalTypeHandler
+
+EnumTypeHandler 会处理任意继承了 Enum 的类，默认情况下将 Enum 值转换为其字面量，通过指定 typeHandler 的 javaType 属性更改转换的类型
+
+### 对象工厂
+
+MyBatis 通过对象工厂生成结果对象的实例，默认的对象工厂只负责实例化目标类，通过无参构造或通过存在的参数映射调用带有参数的构造方法
+
+继承 DefaultObjectFactory 以实现自定义的对象工厂 
+
+### 插件
+
+MyBatis 运行在映射语句执行过程中的某一点进行拦截调用，默认情况下允许使用插件来拦截的方法调用：
+
+- Executor (update, query, flushStatements, commit, rollback, getTransaction, close, isClosed)
+- ParameterHandler (getParameterObject, setParameters)
+- ResultSetHandler (handleResultSets, handleOutputParameters)
+- StatementHandler (prepare, parameterize, batch, update, query)
+
+只需要实现 Interceptor 接口并指定需要拦截的方法签名即可使用插件
+
+```java
+// ExamplePlugin.java
+@Intercepts({@Signature(
+  type= Executor.class,
+  method = "update",
+  args = {MappedStatement.class,Object.class})})
+public class ExamplePlugin implements Interceptor {
+  private Properties properties = new Properties();
+
+  @Override
+  public Object intercept(Invocation invocation) throws Throwable {
+    // implement pre processing if need
+    Object returnObject = invocation.proceed();
+    // implement post processing if need
+    return returnObject;
+  }
+
+  @Override
+  public void setProperties(Properties properties) {
+    this.properties = properties;
+  }
+}
+```
+
+### 环境配置
+
+MyBatis 可以配置成多种环境，将 SQL 映射应用于多种数据库中，便于区分开发、测试、生产环境，也有利于数据库的迁移
+
+虽然 MyBatis 能连接多个数据库，但生成的 SqlSession 实例只能对应其中一个
+
+#### 事务管理器
+
+事务管理器是环境配置的一个属性，在 MyBatis 中有两种配置管理器：
+
+- JDBC：直接使用内部封装的 JDBC 的提交和回滚功能，依赖连接来管理事务作用域，默认情况下在关闭连接后会自动提交
+- MANAGED：不会提交和回滚连接，由容器进行事务管理
+
+Spring 框架会使用自带的事务管理器覆盖 MyBatis 的配置
+
+#### 数据源
+
+MyBatis 使用标准的 JDBC 数据源接口进行 JDBC 连接对象资源的配置，有三种内置的数据源类型：
+
+- UNPOOLED：不使用连接池，每次请求都会打开与关闭一个连接
+  - 适用于数据库连接可用性要求不高的简单程序，性能表现依赖于数据库，故适用于连接池不重要的数据库
+- POOLED：使用"池"的概念组织 JDBC 连接对象，避免创建新的连接实例所需的初始化和认证时间，能够快速响应并发请求
+- JNDI：EJB 或应用服务器这类容器可以集中或在外部配置数据源，然后放置一个 JNDI 上下文的数据源引用
+
+## XML 映射器
+
+MyBatis 通过简单的 XML 映射语句减少了大量的 JDBC 代码
+
+### select
+
+每个插入、更新、删除操作之间，通常会执行多个查询操作
+
+### insert/update/delete
+
+insert 语句支持自定义主键生成方法
+
+可以传入集合，通过 foreach 标签进行批量处理
+
+### sql
+
+用于定义可重用的 SQL 代码片段，以便在其他语句中使用，参数可以在编译期确定：
+
+```xml
+<sql id="userColumns"> ${alias}.id,${alias}.username,${alias}.password </sql>
+```
+
+也可以在不同的 include 元素中定义不同的参数值：
+
+```xml
+<select id="selectUsers" resultType="map">
+  select
+    <include refid="userColumns"><property name="alias" value="t1"/></include>,
+    <include refid="userColumns"><property name="alias" value="t2"/></include>
+  from some_table t1
+    cross join some_table t2
+</select>
+```
+
+### 参数
+
+简单的使用场景：
+
+```xml
+<select id="selectUsers" resultType="User">
+  select id, username, password
+  from users
+  where id = #{id}
+</select>
+```
+
+原始类型或简单数据类型在没有其他属性时会直接使用值作为参数
+
+传入复杂对象：
+
+```xml
+<insert id="insertUser" parameterType="User">
+  insert into users (id, username, password)
+  values (#{id}, #{username}, #{password})
+</insert>
+```
+
+MyBatis 会查找传入的 User 中的 id、username、password 属性，并将值传入预处理语句的参数中
+
+参数通过设置 jdbcType、javaType、typeHandler 等属性自定义参数及其处理方式，但 允许 null 且会使用 null 的参数必须指定 jdbcType
+
+#### 字符串替换(${} vs #{})
+
+默认情况下，使用 #{} 时，MyBatis 会创建 PreparedStatement 参数占位符，并通过占位符按序安全地设置参数
+
+如 #{item.name} 会使用反射从参数对象中获取 item 对象的 name 值，相当于 param.getItem().getName()
+
+```xml
+<select id="selectPerson" parameterType="int" resultType="hashmap">
+  SELECT * FROM PERSON WHERE ID = #{id}
+</select>
+```
+
+上述 SQL 会创建一个预处理语句：
+
+```sql
+SELECT * FROM PERSON WHERE ID = ?
+```
+
+${} 是 properties 文件中的变量占位符，可以用于标签属性值和 sql 内部，属于原样文本替换，可以替换任意内容，不会对传参进行修改或转义
+
+如用于排序的字段 ${orderColumn} 可以为 `name` 、`name desc`、`name, sex asc`，从而实现==更为灵活==的排序，但在接收用户输入会导致潜在的 sql 注入攻击
+
+#{} 通过预编译 SQL，将传入的参数都视为字符串，即使传入 sql 注入语句也不会被执行，如：
+
+```sql
+SELECT * FROM PERSON WHERE ID = 1 OR ID > 0
+```
+
+会被编译为：
+
+```sql
+SELECT * FROM PERSON WHERE ID = '1 OR ID > 0'
+```
+
+### 结果映射
+
+resultMap 极大地简化了 JDBC 的 ResultSets 数据提取代码，且在一些情形下允许进行一些 JDBC 不支持的操作
