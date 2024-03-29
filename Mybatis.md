@@ -62,8 +62,13 @@ SqlSessionFactory sqlSessionFactory = new SqlSessionFactoryBuilder().build(input
 
 XML 配置文件包含 MyBatis 系统的核心配置：
 
-- 数据库连接实例的数据源
-- 事务管理器
+- 数据库连接实例的数据源：从已配置的数据源获取连接，还是使用自定义的连接
+- 事务管理器：在 session 作用域中使用事务作用域，还是自动提交
+- 语句执行：根据需求选择不同的执行器
+  - ExecutorType.SIMPLE：没有特别的行为，为每个语句的执行创建一个新的预处理语句
+  - ExecutorType.REUSE：复用预处理语句
+  - ExecutorType.BATCH：批量执行所有更新语句，必要时会将多条更新语句中的 select 分隔开
+
 
 ### Configuration 配置类
 
@@ -81,6 +86,8 @@ SqlSessionFactory sqlSessionFactory = new SqlSessionFactoryBuilder().build(confi
 ## SqlSession
 
 SqlSession 提供在数据库执行 SQL 命令所需的所有方法，即可以通过 SqlSession 实例执行已映射的 SQL 语句
+
+当 MyBatis 与一些依赖注入框架搭配使用时，SqlSession 将被依赖注入框架创建并注入，不需要通过 SqlSessionFactoryBuilder 或 SqlSessionFactory 创建
 
 ### XML 配置文件
 
@@ -116,6 +123,8 @@ try(SqlSession session = sqlSessionFactory.openSession()) {
     Blog blog = mapper.selectBlog(101);
 }
 ````
+
+mapper 接口不需要实现任何接口或继承自任何类，只需要方法签名可以被用来唯一识别对应的映射语句
 
 ### 基于 Java 注解配置
 
@@ -434,7 +443,9 @@ resultMap 极大地简化了 JDBC 的 ResultSets 数据提取代码，且在一�
 
 id 和 result 元素都将一个列的值映射到一个简单数据类型的属性或字段
 
-两者的唯一不同是，id 元素对应的属性会被标记为对象的标识符，在比较对象实例时使用，可以提交整体性能，尤其是进行缓存和嵌套结果映射时
+两者的唯一不同是，id 元素对应的属性会被标记为对象的标识符，在比较对象实例时使用，可以提高整体性能，尤其是进行缓存和嵌套结果映射时
+
+==应该总是指定一个或多个可以唯一标识结果的属性，MyBatis 不依赖该标识工作，但会产生严重的性能问题==
 
 #### 关联
 
@@ -471,3 +482,259 @@ select = "selectAuthor" 表示应该使用 selectAuthor 语句加载 author 属�
 MyBatis 对这样的查询进行延迟加载，因此可以将大量语句同时运行的开销分散，但在加载结果列表后立刻遍历列表以获取嵌套数据时会触发所有延迟加载查询，严重影响性能
 
 ##### 关联的嵌套结果映射
+
+在一条 SQL 语句中将两个表连接在一起，而不是执行一个独立的查询语句
+
+````xml
+<select id="selectBlog" resultMap="blogResult">
+  select
+    B.id            as blog_id,
+    B.title         as blog_title,
+    B.author_id     as blog_author_id,
+    A.id            as author_id,
+    A.username      as author_username,
+    A.password      as author_password,
+    A.email         as author_email,
+    A.bio           as author_bio
+  from Blog B left outer join Author A on B.author_id = A.id
+  where B.id = #{id}
+</select>
+````
+
+可以将两者的关联元素委托其他结果映射来加载实例：
+
+```xml
+<resultMap id="blogResult" type="Blog">
+  <id property="id" column="blog_id" />
+  <result property="title" column="blog_title"/>
+  <association property="author" column="blog_author_id" javaType="Author" resultMap="authorResult"/>
+</resultMap>
+
+<resultMap id="authorResult" type="Author">
+  <id property="id" column="author_id"/>
+  <result property="username" column="author_username"/>
+  <result property="password" column="author_password"/>
+  <result property="email" column="author_email"/>
+  <result property="bio" column="author_bio"/>
+</resultMap>
+```
+
+##### 关联的多结果集(ResultSet)
+
+某些数据库允许存储过程返回多个结果集，或一次性执行多个语句，每个语句返回一个结果集
+
+```sql
+SELECT * FROM BLOG WHERE ID = #{id}
+
+SELECT * FROM AUTHOR WHERE ID = #{id}
+```
+
+利用这种特性能在不使用连接的情况下，只访问数据库一次就能获得相关数据
+
+在映射语句中，通过 resultSets 属性为每个结果集指定一个名字：
+
+```xml
+<select id="selectBlog" resultSets="blogs,authors" resultMap="blogResult" statementType="CALLABLE">
+  {call getBlogsAndAuthors(#{id,jdbcType=INTEGER,mode=IN})}
+</select>
+```
+
+之后可以通过指定使用结果集的数据填充关联：
+
+```xml
+<resultMap id="blogResult" type="Blog">
+  <id property="id" column="id" />
+  <result property="title" column="title"/>
+  <association property="author" javaType="Author" resultSet="authors" column="author_id" foreignColumn="id">
+    <id property="id" column="id"/>
+    <result property="username" column="username"/>
+    <result property="password" column="password"/>
+    <result property="email" column="email"/>
+    <result property="bio" column="bio"/>
+  </association>
+</resultMap>
+```
+
+#### 集合
+
+集合与关联极其相似，用于表示一组结果集合
+
+```xml
+<collection property="posts" ofType="domain.blog.Post">
+  <id property="id" column="post_id"/>
+  <result property="subject" column="post_subject"/>
+  <result property="body" column="post_body"/>
+</collection>
+```
+
+使用 ofType 属性将 JavaBean 属性的类型和集合存储的类型区分：
+
+```xml
+<collection property="posts" javaType="ArrayList" column="id" ofType="Post" select="selectPostsForBlog"/>
+```
+
+表示存储 Post 元素的 ArrayList 集合，MyBatis 一般情况下能够推断 javaType 属性，因此不需要填写
+
+#### 鉴别器
+
+鉴别器用于处理一次查询返回多个不同的结果集的情况，类似 switch 关键字
+
+```xml
+<discriminator javaType="int" column="draft">
+  <case value="1" resultType="DraftPost"/>
+</discriminator>
+```
+
+鉴别器的定义需要指定两个属性：
+
+- column：指定 MyBatis 查询被比较值的地方
+- javaType：用于确保使用正确的相等测试
+
+### 自动映射
+
+当自动映射查询结果时，MyBatis 会获取结果中返回的列名并在 Java 类中查找相同名字的属性，mapUnderscoreToCamelCase 将开启 下划线分隔 与 驼峰命名 的自动映射
+
+在提供了结果映射后，自动映射也能工作，即先处理未被设置映射的列(自动映射)，再处理手动映射
+
+有三种自动映射等级：
+
+- NONE：禁用自动映射
+- PARTIAL：对除在内部定义了嵌套结果映射(手动设置)以外的属性进行映射
+- FULL：自动映射所有属性，连接查询会在同一行中获取多个不同实体的数据，可能导致非预期的映射(同名列的错误映射)
+
+### 缓存
+
+MyBatis 内置了强大的事务性查询缓存机制，可以非常方便地配置和定制
+
+#### 本地缓存
+
+每当一个新 session 被创建，MyBatis 就会创建一个与之相关联的本地缓存，任何在 session 执行过的查询结果都会被保存在本地缓存中，当再次执行参数相同的查询时就不需要实际查询数据库
+
+本地缓存会在做出修改、事务提交、回滚、关闭 session 时清空
+
+#### 二级缓存
+
+通过在 xml 配置文件中开启，且其作用域为当前映射文件：
+
+```xml
+<cache/>
+```
+
+默认只启用本地的会话缓存，仅对一个会话中的数据进行缓存：
+
+- 缓存 select 语句的结果
+- insert/update/delete 会刷新缓存
+- 默认使用 LRU 进行缓存淘汰
+- 缓存会不定时刷新
+- 缓存会报错列表或对象的 1k 个引用
+- 线程安全，缓存获取到的对象不共享，可以安全地被修改
+
+缓存支持的清除策略：
+
+- LRU
+- FIFO
+- SOFT：软引用，基于 GC 状态和软引用规则移除对象
+- WEAK：弱引用，基于 GC 状态和弱引用规则移除对象
+
+二级缓存是事务性的，即当 SqlSession 完成并提交时，或完成并回滚，但未执行 flushCache=true 的 insert/delete/update 语句时，缓存会更新
+
+#### 自定义缓存
+
+通过 type 属性引入自定义的缓存实现
+
+````xml
+<cache type="com.domain.something.MyCustomCache"/>
+````
+
+该类必须实现 Cache 接口，且提供一个接收 String 参数作为 id 的构造器
+
+```java
+public interface Cache {
+  String getId();
+  int getSize();
+  void putObject(Object key, Object value);
+  Object getObject(Object key);
+  boolean hasKey(Object key);
+  Object removeObject(Object key);
+  void clear();
+}
+```
+
+MyBatis 自带的缓存淘汰机制不适用于自定义缓存，需要另外实现
+
+## 动态 SQL
+
+动态 SQL 极大地简化了根据不同条件拼接 SQL 语句的难度
+
+MyBatis 借助基于 OGNL 的表达式大大精简了动态 SQL 所需的元素种类：
+
+- if：通过 if 标签进行逻辑判断，从而动态拼接 SQL
+
+- choose(when，otherwise)：choose 标签中包含 when 与 otherwise，类似 switch 关键字
+
+  - when：类似 choose 内的 if，进行逻辑判断，类似 case
+  - otherwise：choose 的默认出口，类似 default
+
+- trim(where，set)：用于解决动态拼接时的连接问题(多余的 AND)
+
+  - where：只会在子元素返回内容的情况下才插入 WHERE 子句，避免 WHERE 后为空的语法错误，且会去除子句开头中的 AND/OR，避免 WHERE AND
+  - set：用于 update 语句中的 set，会动态地在行首插入 SET 关键字，且会删除额外的逗号
+
+- foreach：指定一个集合，声明可以在元素内使用的集合项(item)和索引(index)变量，允许指定开头与结尾的字符串以及集合项迭代之间的分隔符
+
+- script：在带注解的映射器接口类中使用动态 SQL
+
+  ```java
+      @Update({"<script>",
+        "update Author",
+        "  <set>",
+        "    <if test='username != null'>username=#{username},</if>",
+        "    <if test='password != null'>password=#{password},</if>",
+        "    <if test='email != null'>email=#{email},</if>",
+        "    <if test='bio != null'>bio=#{bio}</if>",
+        "  </set>",
+        "where id=#{id}",
+        "</script>"})
+      void updateAuthorValues(Author author);
+  ```
+
+- bind：允许在 OGNL 表达式以外创建一个变量，并将其绑定到当前的上下文
+
+  ```xml
+  <select id="selectBlogsLike" resultType="Blog">
+    <bind name="pattern" value="'%' + _parameter.getTitle() + '%'" />
+    SELECT * FROM BLOG
+    WHERE title LIKE #{pattern}
+  </select>
+  ```
+
+#### 多数据库支持
+
+配置了 databaseIdProvider 后可以在动态代码中使用 "_databaseId" 为不同的数据库构建特定的语句
+
+```xml
+<insert id="insert">
+  <selectKey keyProperty="id" resultType="int" order="BEFORE">
+    <if test="_databaseId == 'oracle'">
+      select seq_users.nextval from dual
+    </if>
+    <if test="_databaseId == 'db2'">
+      select nextval for seq_users from sysibm.sysdummy1"
+    </if>
+  </selectKey>
+  insert into users values (#{id}, #{name})
+</insert>
+```
+
+## 日志
+
+MyBatis 通过使用内置的日志工厂提供日志功能，内置日志工厂将会把日志工作委托给下面的实现之一：
+
+- SLF4J
+- Apache Commons Logging
+  - Tomcat 和 WebShpere 的类路径中已包含
+- Log4j 2
+- Log4j（3.5.9起废弃）
+- JDK logging
+
+MyBatis 内置日志工厂基于运行时自省机制选择合适的日志工具。它会使用第一个查找得到的工具（按上文列举的顺序查找）。如果一个都未找到，日志功能就会被禁用。
