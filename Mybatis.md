@@ -1,6 +1,6 @@
 # MyBatis
 
-MyBatis 框架用于简化 Java 程序与数据库连接的操作
+MyBatis 框架用于简化 Java 程序与数据库连接的操作，由于需要手动编写部分 sql，故属于半自动 ORM 映射工具
 
 ## JDBC
 
@@ -126,6 +126,44 @@ try(SqlSession session = sqlSessionFactory.openSession()) {
 
 mapper 接口不需要实现任何接口或继承自任何类，只需要方法签名可以被用来唯一识别对应的映射语句
 
+#### DAO 接口
+
+一个 xml 映射文件都会有一个 DAO 接口与之对应，DAO 接口即 Mapper 接口，接口的全限定名就是映射文件中的 namespace，接口的方法名就是映射文件中的 id，接口方法内的参数就是传递给 sql 的参数
+
+mapper 接口没有实现类，当调用接口方法时，接口全限定名 + 方法名拼接字符串为 key 值，可以唯一定位一个 xml 文件中的 MappedStatement，在 MyBatis 中 select/insert/update/delete 标签都会被解析为 MappedStatement 对象
+
+DAO 接口中的方法可以被重载，但 xml 中的 id 不能重复，MyBatis 的 DAO 接口可以有多个重载方法，但多个接口对应的映射必须只有一个，否则启动会报错
+
+DAO 接口的工作原理是 JDK 动态代理，MyBatis 运行时会使用 JDK 动态代理为 DAO 接口生成代理 proxy 对象，代理对象 proxy 会拦截接口方法，转而执行 MappedStatement 所代表的 sql，然后将 sql 执行结果返回
+
+DAO 接口通过 getProperty 方法获取传入的参数:
+
+```java
+public Object getProperty(Map context, Object target, Object name) {
+  Map map = (Map) target;
+
+  Object result = map.get(name);
+  if (map.containsKey(name) || result != null) {
+    return result;
+  }
+
+  Object parameterObject = map.get(PARAMETER_OBJECT_KEY);
+  if (parameterObject instanceof Map) {
+    return ((Map)parameterObject).get(name);
+  }
+
+  return null;
+}
+
+// ((Map)parameterObject).get(name)
+public V get(Object key) {
+  if (!super.containsKey(key)) {
+    throw new BindingException("Parameter '" + key + "' not found. Available parameters are " + keySet());
+  }
+  return super.get(key);
+}
+```
+
 ### 基于 Java 注解配置
 
 对于映射器类可以使用 Java 注解进行简单 SQL 语句的配置，能够令代码更加简洁，但在复杂 SQL 场景则会使 SQL 语句更加混乱
@@ -197,8 +235,15 @@ MyBatis 中极为重要的调整设置，会改变 MyBatis 的运行时行为
 
 - cacheEnabled：全局性地开启或关闭所有映射器配置文件中已配置的任何缓存。
 - lazyLoadingEnabled：延迟加载的全局开关。当开启时，所有关联对象都会延迟加载。 特定关联关系中可通过设置 `fetchType` 属性来覆盖该项的开关状态。
+  - MyBatis 仅支持 association 关联对象和 colleciton 集合对象的延迟加载
+  - 延迟加载的原理是，使用 CGLIB 创建目标对象的代理对象，当调用目标方法时，进入拦截器方法，如调用 a.getB().getName()，拦截器 invoke() 方法发现 a.getB() 是 null 值，那么就会单独发送实现保存好的查询关联 B 对象的 sql，把 B 查询上来，然后调用 a.setB(b)，于是 a 的对象 b 属性就有值了，接着完成 a.getB().getName() 方法的调用
+
 - useGeneratedKeys：允许 JDBC 支持自动生成主键，需要数据库驱动支持。如果设置为 true，将强制使用自动生成主键。尽管一些数据库驱动不支持此特性，但仍可正常工作（如 Derby）。
-- defaultExecutorType： 配置默认的执行器。SIMPLE 就是普通的执行器；REUSE 执行器会重用预处理语句（PreparedStatement）； BATCH 执行器不仅重用语句还会执行批量更新。
+- defaultExecutorType： 配置默认的执行器。
+  - SIMPLE 就是普通的执行器，每次执行 update/select 就开启一个 Statement 对象，用完立刻关闭对象
+  - REUSE 执行器会重用预处理语句（PreparedStatement），以 sql 作为 key 查找 Statement 对象，存在就使用
+  - BATCH 执行器不仅重用语句还会执行批量更新，所有 sql 都添加到批处理中，等待统一执行，缓存多个 Statement 对象，每个 Statement 对象都是 addBatch() 完毕后，等待逐一执行 executeBatch() 批处理
+
 
 ### 类型别名
 
@@ -320,6 +365,8 @@ MyBatis 使用标准的 JDBC 数据源接口进行 JDBC 连接对象资源的配
 
 MyBatis 通过简单的 XML 映射语句减少了大量的 JDBC 代码
 
+MyBatis 将所有 xml 配置信息都封装到 All-In-One 重量级对象 Configuration 内部，在 xml 映射文件中，parameterMap 标签会被解析为 ParameterMap 对象，其每个子元素会被解析为 ResultMapping 对象，每个 select/insert/update/delete 标签均会被解析为 MappedStatement 对象，标签内的 sql 会被解析为 BoundSql 对象
+
 ### select
 
 每个插入、更新、删除操作之间，通常会执行多个查询操作
@@ -413,6 +460,8 @@ SELECT * FROM PERSON WHERE ID = '1 OR ID > 0'
 
 ### 结果映射
 
+MyBatis 通过 resultMap 标签，逐一定义列名和对象属性名之间的映射关系，或使用 sql 列的别名功能，将列别名书写为对象属性名，MyBatis 会忽略列名大小写，智能找到与之对应对象属性名
+
 resultMap 极大地简化了 JDBC 的 ResultSets 数据提取代码，且在一些情形下允许进行一些 JDBC 不支持的操作
 
 通过 resultType="" 使用全限定类名将 ResultSets 映射到 bean，MyBatis 通过自动生成的 resultMap 根据属性名映射列到 JavaBean 的属性，而不需要进行显示配置
@@ -453,6 +502,8 @@ association 元素处理"有一个"类型的关系，关联结果映射需要告
 
 - 嵌套 Select 查询：通过执行另外一个 SQL 映射语句加载期望的复杂类型
 - 嵌套结果映射：使用嵌套的结果映射处理连接结果的重复子集
+
+resultMap 标签内的 id 子标签指定了唯一确定一条记录的 id 列，MyBatis 根据 id 列值来完成记录的去重， id 可以有多个，类似联合主键
 
 ##### 嵌套 select 查询
 
@@ -738,3 +789,20 @@ MyBatis 通过使用内置的日志工厂提供日志功能，内置日志工厂
 - JDK logging
 
 MyBatis 内置日志工厂基于运行时自省机制选择合适的日志工具。它会使用第一个查找得到的工具（按上文列举的顺序查找）。如果一个都未找到，日志功能就会被禁用。
+
+## 分页
+
+MyBatis 使用 RowBounds 对象进行分页，它是针对 ResultSet 结果集执行的内存分页，而非物理分页，可以在 sql 内直接书写带有物理分页的参数完成物理分页，也可以使用分页插件完成物理分页
+
+物理分页：在数据库中进行分页
+
+内存分页：将所有数据加载进内存后，由代码进行分页
+
+分页插件的基本原理是使用 MyBatis 提供的插件接口，实现自定义插件，在插件的拦截方法内拦截待执行的 sql，然后重写 sql，根据 dialect 方言，添加对应的物理分页语句和物理分页参数
+
+### 分页插件
+
+MyBatis 仅可以编写针对 ParameterHandler、ResultSetHandler、StatementHandler、Executor 这 4 种接口的插件，MyBatis 使用 JDK 的动态代理，为需要拦截的接口生成代理对象以实现接口方法拦截功能，每当执行这 4 中接口对象方法时，就会进入拦截方法，即 InvocationHandler 的 invoke() 方法
+
+实现 MyBatis 的 Interceptor 接口并复写 intercept() 方法，然后再给插件编写注解，指定需要拦截的接口方法，并在配置文件中配置编写的插件
+
