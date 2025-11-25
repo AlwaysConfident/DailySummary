@@ -37,7 +37,7 @@ InnoDB 是多线程架构：
 - Master Thread：核心线程，负责将缓冲池的数据写回磁盘，保证数据一致性
   - 脏页刷新
   - Undo Page 回收
-  -  合并插入缓存
+  - 合并插入缓存
 - IO Thread：InnoDB 使用大量的 AIO 处理写 IO 请求，IO Thread 用于负责 AIO 的回调处理
 - Purge Thread：在事务提交后，undolog 不再被需要，Purge Thread 就是用于回收已使用并分配的 Undo Page
 - Page Cleaner Thread：负责脏页刷新操作，减轻主线程负担
@@ -237,15 +237,15 @@ binlog_format参数十分重要，它影响了记录二进制日志的格式。�
 - ROW：记录表的行更改情况。可以为数据库的恢复和复制带来更好的可靠性。但是不能忽略的一点是，这会带来二进制文件大小的增加，有些语句下的ROW格式可能需要更大的容量。
 
 - MIXED：MySQL默认采用STATEMENT格式进行二进制日志文件的记录，但是在一些情况下会使用ROW格式，可能的情况有：
-
+  
   1）表的存储引擎为NDB，这时对表的DML操作都会以ROW格式记录。
-
+  
   2）使用了UUID()、USER()、CURRENT_USER()、FOUND_ROWS()、ROW_COUNT()等不确定函数。
-
+  
   3）使用了INSERT DELAY语句。
-
+  
   4）使用了用户定义函数（UDF）。
-
+  
   5）使用了临时表（temporary table）。
 
 二进制日志文件的文件格式为二进制，不能像错误日志文件、慢查询日志文件那样用cat、head、tail等命令来查看。要查看二进制日志文件的内容，必须通过MySQL提供的工具mysqlbinlog。
@@ -304,3 +304,12 @@ redo log vs bin log：
 - 页：页是InnoDB磁盘管理的最小单位。在InnoDB存储引擎中，默认每个页的大小为16KB。
   - 若设置完成，则所有表中页的大小都为innodb_page_size，不可以对其再次进行修改。除非通过mysqldump导入和导出操作来产生新的库。
 - 行：InnoDB存储引擎是面向行的（row-oriented），也就说数据是按行进行存放的。每个页存放的行记录也是有硬性定义的，最多允许存放16KB/2-200行的记录，即7992行记录。
+
+### InnoDB行记录格式
+
+- Compact：Compact行记录是在MySQL 5.0中引入的，其设计目标是高效地存储数据。简单来说，一个页中存放的行数据越多，其性能就越高。
+  - 变长字段长度列表：按照列的顺序逆序放置的
+  - NULL 标志位：指示该行是否存在 NULL 值，NULL不占该部分任何空间，即NULL除了占有NULL标志位，实际存储不占有任何空间
+  - 记录头信息
+  - 实际存储的每个列数据
+- Redundant
