@@ -1,6 +1,6 @@
 # Netty
 
-Netty 是==基于 NIO 的 cs 框架==，可以快速简单地开发网络应用程序，简化并优化了 TCP 和 UDP 套接字服务器等网络编程，提升了性能与安全性，==支持多种协议==(FTP/SMTP/HTTP)
+Netty 是<mark>基于 NIO 的 cs 框架</mark>，可以快速简单地开发网络应用程序，简化并优化了 TCP 和 UDP 套接字服务器等网络编程，提升了性能与安全性，<mark>支持多种协议</mark>(FTP/SMTP/HTTP)
 
 Netty 主要用于网络通信：
 
@@ -26,6 +26,16 @@ Netty 主要用于网络通信：
 
 用于处理字节流的字节容器，底层为字节数组
 
+`ByteBuf`维护了两个不同的索引：一个用于读取，一个用于写入。当你从`ByteBuf`读取时，它的`readerIndex`将会被递增已经被读取的字节数。同样地，当你写入`ByteBuf`时，它的`writerIndex`也会被递增。
+
+#### 使用模式
+
+- 堆缓冲区：将 ByteBuf 存储在 JVM 的堆中，能在没有使用池化的情况下提供快速的分配和释放。
+
+- 直接缓冲区：堆外缓冲，可以避免通过 socket 发送数据前从堆缓冲区复制到直接缓存区的开销
+  
+  - 因为不受 JVM 的垃圾回收管理，直接缓冲区的空间分配和释放更加昂贵，且
+
 ### Bootstrap/ServerBootstarp
 
 客户端与服务端的启动引导类
@@ -34,9 +44,15 @@ bind() → 绑定本地端口，客户端用于 UDP，服务端用于接收客�
 
 connect() → 客户端连接服务器的指定端口
 
+客户端只需要一个 EventLoopGroup 用于处理与服务端的连接
+
+服务端需要两个 EventLoopGroup，一个用于监听来自客户端的连接请求，连接建立后会构造新的 Channel 再分配给另一个 EventLoopGroup 处理
+
 ### Channel
 
 网络操作抽象类，客户端与服务器建立连接后通过 Channel 进行网络 I/O
+
+它代表一个到实体（如一个硬件设备、一个文件、一个网络套接字或者一个能够执行一个或者多个不同的I/O操作的程序组件）的开放连接，如读操作和写操作
 
 ### EventLoop
 
@@ -52,15 +68,39 @@ EventLoop 通常内部包含一个线程，处理的 I/O 事件都将在其内�
 
 ### ChannelHandler 和 ChannelPipeline
 
-ChannelHandler 是消息处理器，负责处理 C/S 接收和发送的数据
+ChannelHandler 是消息处理器，负责处理 C/S 接收和发送的数据，它充当了所有处理入站和出站数据的应用程序逻辑的容器。
 
-Channel 被创建时，自动分配到专用的 ChannelPipeline 中，ChannelPipeline 由多个 ChannelHandler 组成，每个 ChannelHandler 处理完后传给下一个
+Channel 被创建时，自动分配到专用的 ChannelPipeline 中，ChannelPipeline 由多个 ChannelHandler 组成，每个 ChannelHandler 处理完后传给下一个，入站和出站`ChannelHandler`可以被安装到同一个`ChannelPipeline`中。
+
+在Netty中，有两种发送消息的方式。你可以直接写到`Channel`中，也可以写到和`Channel-Handler`相关联的`ChannelHandlerContext`对象中。前一种方式将会导致消息从`Channel-Pipeline`的尾端开始流动，而后者将导致消息从`ChannelPipeline`中的下一个`Channel- Handler`开始流动。
 
 ### ChannelFuture
 
 Netty 的方法都是异步的(基于 NIO，但通过 Reactor 模型实现异步)，故需要 ChannelFuture 实现回调
 
 通过 ChannelFuture 接口的 addListener() 方法注册一个 ChannelFutureListener，当操作执行完成时，监听就会自动触发返回结果
+
+所有属于同一个`Channel`的操作都被保证其将以它们被调用的顺序被执行。
+
+## 传输
+
+因为Netty为每种传输的实现都暴露了相同的API，所以无论选用哪一种传输的实现，你的代码都仍然几乎不受影响。在所有的情况下，传输的实现都依赖于`interface Channel`、`ChannelPipeline`和`ChannelHandler`。
+
+### 传输 Api
+
+传输API的核心是`interface``Channel`，它被用于所有的I/O操作。每个`Channel`都将会被分配一个`ChannelPipeline`和`ChannelConfig`。`ChannelConfig`包含了该`Channel`的所有配置设置，并且支持热更新。由于特定的传输可能具有独特的设置，所以它可能会实现一个`ChannelConfig`的子类型。
+
+Netty内置了一些可开箱即用的传输：
+
+- NIO：提供了一个所有I/O操作的全异步的实现。它利用了自NIO子系统被引入JDK 1.4时便可用的基于选择器的API。
+
+- OIO：Netty利用了`SO_TIMEOUT`这个`Socket`标志，它指定了等待一个I/O操作完成的最大毫秒数。如果操作在指定的时间间隔内没有完成，则将会抛出一个`SocketTimeout Exception`。Netty将捕获这个异常并继续处理循环。在`EventLoop`下一次运行时，它将再次尝试。
+
+- Epoll：用于Linux的本地非阻塞传输
+
+- Embedded：可以将一组`ChannelHandler`作为帮助器类嵌入到其他的`ChannelHandler`内部。通过这种方式，你将可以扩展一个`ChannelHandler`的功能，而又不需要修改其内部代码。
+
+- Local：用于在同一个JVM中运行的客户端和服务器程序之间的异步通信。
 
 ## Reactor 线程模型
 
