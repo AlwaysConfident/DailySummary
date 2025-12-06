@@ -34,7 +34,28 @@ Netty 主要用于网络通信：
 
 - 直接缓冲区：堆外缓冲，可以避免通过 socket 发送数据前从堆缓冲区复制到直接缓存区的开销
   
-  - 因为不受 JVM 的垃圾回收管理，直接缓冲区的空间分配和释放更加昂贵，且
+  - 因为不受 JVM 的垃圾回收管理，直接缓冲区的空间分配和释放更加昂贵，且处理数据时需要将其复制到 JVM 中
+- 复合缓冲区：为多个`ByteBuf`提供一个聚合视图。
+
+#### 字节级操作
+
+- 随机访问索引：类似数组下标，使用那些需要一个索引值参数的方法（的其中）之一来访问数据既不会改变`readerIndex`也不会改变`writerIndex`。
+
+- 顺序访问索引：ByteBuf 被读索引和写索引分为三个区域
+  
+  - 可丢弃字节：已经被读过，可以丢弃的字节，调用 discardReadBytes 方法可以领可丢弃字节分段变为可写(仅仅移动写索引，并不会擦除原本的内容)，且为了将可读字节移至缓冲区开始，可能会导致内存复制
+  
+  - 可读字节：可读字节分段存储了实际数据。
+  
+  - 可写字节：一个拥有未定义内容的、写入就绪的内存区域。
+
+#### 分配
+
+- ByteBufAllocator：为了降低分配和释放内存的开销，Netty通过`interface ByteBufAllocator`实现了（`ByteBuf`的）池化，它可以用来分配我们所描述过的任意类型的`ByteBuf`实例。可以通过`Channel`（每个都可以有一个不同的`ByteBufAllocator`实例）或者绑定到`ChannelHandler`的`ChannelHandlerContext`获取一个到`ByteBufAllocator`的引用。
+
+- Unpooled 缓冲区：提供了静态的辅助方法来创建未池化的`ByteBuf`实例。
+
+- ByteBufUtil：提供了用于操作`ByteBuf`的静态的辅助方法。
 
 ### Bootstrap/ServerBootstarp
 
