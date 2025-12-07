@@ -35,6 +35,7 @@ Netty 主要用于网络通信：
 - 直接缓冲区：堆外缓冲，可以避免通过 socket 发送数据前从堆缓冲区复制到直接缓存区的开销
   
   - 因为不受 JVM 的垃圾回收管理，直接缓冲区的空间分配和释放更加昂贵，且处理数据时需要将其复制到 JVM 中
+
 - 复合缓冲区：为多个`ByteBuf`提供一个聚合视图。
 
 #### 字节级操作
@@ -94,6 +95,74 @@ ChannelHandler 是消息处理器，负责处理 C/S 接收和发送的数据，
 Channel 被创建时，自动分配到专用的 ChannelPipeline 中，ChannelPipeline 由多个 ChannelHandler 组成，每个 ChannelHandler 处理完后传给下一个，入站和出站`ChannelHandler`可以被安装到同一个`ChannelPipeline`中。
 
 在Netty中，有两种发送消息的方式。你可以直接写到`Channel`中，也可以写到和`Channel-Handler`相关联的`ChannelHandlerContext`对象中。前一种方式将会导致消息从`Channel-Pipeline`的尾端开始流动，而后者将导致消息从`ChannelPipeline`中的下一个`Channel- Handler`开始流动。
+
+#### 生命周期
+
+- Channel：
+  
+  - 未注册到 EventLoop
+  
+  - 已注册
+  
+  - 未与远程节点连接
+  
+  - 已连接
+
+- ChannelHandler：加入/移除 ChannelPipeline、异常
+  
+  - ChannelInboundHandler：
+    
+    - Channel 从 EventLoop 注册/注销
+    
+    - Channel 处于/离开活动状态
+    
+    - Channel 的上一个读操作已完成
+    
+    - 从 Channel 读取数据
+    
+    - Channel 的可写状态发生改变
+    
+    - 事件触发器
+  
+  - ChannelOutboundHandler：可以按需推迟操作或事件
+    
+    - Channel 绑定到本地地址
+    
+    - Channel 连接到/断开远程节点
+    
+    - 关闭 Channel
+    
+    - 从 Channel 读取数据
+    
+    - 通过 Channel 将入队数据冲刷到远程节点
+    
+    - 通过 Channel 将数据写入远程节点
+
+#### ChannelHandler 适配器
+
+  可以使用`ChannelInboundHandlerAdapter`和`ChannelOutboundHandlerAdapter`类作为自己的`ChannelHandler`的起始点。这两个适配器分别提供了`ChannelInboundHandler`和`ChannelOutboundHandler`的基本实现。通过扩展抽象类`ChannelHandlerAdapter`，它们获得了它们共同的超接口`ChannelHandler`的方法。
+
+#### 资源管理
+
+每当通过调用`ChannelInboundHandler.channelRead()`或者`ChannelOutbound- Handler.write()`方法来处理数据时，你都需要确保没有任何的资源泄漏。
+
+为了帮助你诊断潜在的（资源泄漏）问题，Netty提供了`class ResourceLeakDetector`，定义了 4 中泄露检测级别：
+
+- DISABLED：禁用泄露检测
+
+- SIMPLE：使用 1% 的默认采样率检测并报告任何发现的泄露
+
+- ADVANCED：使用默认采样率，报告发现的任何泄露和对应的消息被访问的位置
+
+- PARANOID：对每次访问都进行采样
+
+如果一个消息被消费或者丢弃了，并且没有传递给`ChannelPipeline`中的下一个`ChannelOutboundHandler`，那么用户就有责任调用`ReferenceCountUtil.release()`。如果消息到达了实际的传输层，那么当它被写入时或者`Channel`关闭时，都将被自动释放。
+
+#### ChannelPipeline
+
+每一个新创建的`Channel`都将会被分配一个新的`ChannelPipeline`。这项关联是永久性的；`Channel`既不能附加另外一个`ChannelPipeline`，也不能分离其当前的。
+
+`ChannelHandler`可以通过添加、删除或者替换其他的`ChannelHandler`来实时地修改`ChannelPipeline`的布局。
 
 ### ChannelFuture
 
