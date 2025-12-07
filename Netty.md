@@ -164,6 +164,14 @@ Channel 被创建时，自动分配到专用的 ChannelPipeline 中，ChannelPip
 
 `ChannelHandler`可以通过添加、删除或者替换其他的`ChannelHandler`来实时地修改`ChannelPipeline`的布局。
 
+#### ChannelHandlerContext
+
+`ChannelHandlerContext`代表了`ChannelHandler`和`ChannelPipeline`之间的关联，每当有`ChannelHandler`添加到`ChannelPipeline`中时，都会创建`ChannelHandlerContext`。`ChannelHandlerContext`的主要功能是管理它所关联的`ChannelHandler`和在同一个`ChannelPipeline`中的其他`ChannelHandler`之间的交互。
+
+如果调用`Channel`或者`ChannelPipeline`上的这些方法，它们将沿着整个`ChannelPipeline`进行传播。而调用位于`ChannelHandlerContext`上的相同方法，则将从当前所关联的`ChannelHandler`开始，并且只会传播给位于该`ChannelPipeline`中的下一个能够处理该事件的`ChannelHandler`。
+
+`ChannelHandlerContext`和`ChannelHandler`之间的关联（绑定）是永远不会改变的，所以缓存对它的引用是安全的；
+
 ### ChannelFuture
 
 Netty 的方法都是异步的(基于 NIO，但通过 Reactor 模型实现异步)，故需要 ChannelFuture 实现回调
