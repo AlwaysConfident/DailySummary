@@ -82,11 +82,21 @@ Netty 最核心的概念
 
 负责监听网络事件并调用事件处理器进行相关 I/O 操作处理
 
-Channel 为 Netty 的网络操作抽象类，EventLoop 负责处理注册到其上的 Channel 的 I/O 操作
+Channel 为 Netty 的网络操作抽象类，EventLoop 负责处理注册到其上的 Channel 的 I/O 操作(包括监听到的 Channel 的 IO 事件与 ChannelHandler 的业务逻辑)
 
 EventLoopGroup 包含多个 EventLoop 且管理它们生命周期
 
 EventLoop 通常内部包含一个线程，处理的 I/O 事件都将在其内部的线程中，保证线程安全
+
+对于定时任务，EventLoop 会严格按照执行队列中的任务顺序执行(即在到达指定时间后也不会中断当前任务)，对于过期的定期任务，根据不同的调度策略会有不同的执行方法：
+
+- 固定时间：只有在执行定期任务时才会计算下一次的执行时间，例如对于周期为 10s 的定期任务，延迟至 25s 才执行，则下次执行会在 35s
+
+- 固定速率：当检测到任务延期时，会尽量补偿错过的任务，例如 25s 时会执行两次定期任务，且下一次执行在 30s
+
+#### 线程管理
+
+Netty 会通过调用`EventLoop`的`inEventLoop(Thread)`方法判断当前任务调用的线程是否为 EventLoop 本身的线程(即该任务是否直接分配给 EventLoop 本身的)，如果是则直接由 EventLoop 线程执行，否则 EventLoop 会将其加入自己独立的任务队列中
 
 ### ChannelHandler 和 ChannelPipeline
 
@@ -179,6 +189,10 @@ Netty 的方法都是异步的(基于 NIO，但通过 Reactor 模型实现异步
 通过 ChannelFuture 接口的 addListener() 方法注册一个 ChannelFutureListener，当操作执行完成时，监听就会自动触发返回结果
 
 所有属于同一个`Channel`的操作都被保证其将以它们被调用的顺序被执行。
+
+### Bootstrap
+
+引导一个应用程序是指对它进行配置，并使它运行起来的过程
 
 ## 传输
 
