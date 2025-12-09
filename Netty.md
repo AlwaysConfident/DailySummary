@@ -190,10 +190,6 @@ Netty 的方法都是异步的(基于 NIO，但通过 Reactor 模型实现异步
 
 所有属于同一个`Channel`的操作都被保证其将以它们被调用的顺序被执行。
 
-### Bootstrap
-
-引导一个应用程序是指对它进行配置，并使它运行起来的过程
-
 ## 传输
 
 因为Netty为每种传输的实现都暴露了相同的API，所以无论选用哪一种传输的实现，你的代码都仍然几乎不受影响。在所有的情况下，传输的实现都依赖于`interface Channel`、`ChannelPipeline`和`ChannelHandler`。
@@ -213,6 +209,34 @@ Netty内置了一些可开箱即用的传输：
 - Embedded：可以将一组`ChannelHandler`作为帮助器类嵌入到其他的`ChannelHandler`内部。通过这种方式，你将可以扩展一个`ChannelHandler`的功能，而又不需要修改其内部代码。
 
 - Local：用于在同一个JVM中运行的客户端和服务器程序之间的异步通信。
+
+## 编解码器
+
+将应用程序的数据转换为网络格式，以及将网络格式转换为应用程序的数据的组件分别叫作编码器和解码器，同时具有这两种功能的单一组件叫作编解码器。
+
+### 解码器
+
+- ByteToMessageDecoder：解码器的抽象基类，将字节解码为消息
+
+- ReplayingDecoder
+
+- MessageToMessageDecoder
+
+### 编码器
+
+- MessageToByteEncoder
+
+- MessageToMessageEncoder
+
+### 编解码器
+
+在同一个类中管理入站和出站数据和消息的转换
+
+- ByteToMessageCodec
+
+- MessageToMessageCodec
+
+- CombinedChannelDuplexHandler
 
 ## Reactor 线程模型
 
